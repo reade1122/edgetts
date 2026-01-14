@@ -1,0 +1,2388 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>語音報讀系統</title>
+      <style>
+	      html {
+    touch-action: manipulation;
+}
+	     body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+select, input, button {
+  font-size: 18px; /* Increase font size for better readability */
+  padding: 15px; /* Increase padding for larger touch targets */
+  margin-bottom: 20px;
+  border-radius: 8px; /* Add rounded corners for a modern look */
+  border: 2px solid #ccc; /* Add border for better visibility */
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Add subtle shadow for depth */
+}
+
+select {
+  width: 20%; /* Increase width for better usability */
+  z-index: 1900;
+  position: fixed;
+  right: 20px;
+  top:5px;
+}
+#pdfContainer {
+  margin-top: 80px; /* 設定頂部邊距為 80px */
+}
+  #prevPage, #nextPage {
+    padding: 15px 30px; /* 增加內邊距以擴大觸控區域 */
+    font-size: 18px; /* 增加字體大小以提高可讀性 */
+    cursor: pointer;
+    background-color: #007BFF; /* 添加背景色以提高可見性 */
+    color: white; /* 將文字顏色改為白色 */
+    border: none; /* 移除默認邊框 */
+    transition: background-color 0.3s; /* 添加過渡效果以提高互動性 */
+  }
+
+  #prevPage:hover, #nextPage:hover {
+    background-color: #0056b3; /* 懸停時更改背景色 */
+  }
+audio {
+    width: 50%;
+    bottom: 5px;
+    z-index: 1000;
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+}
+	.pdf-page-container {
+            margin-bottom: 20px;
+            position: relative;
+            display: inline-block;
+        }
+        .pdf-viewer {
+            position: relative;
+            display: inline-block;
+        }
+        canvas {
+            display: block;
+        }
+        .textLayer {
+            position: absolute;
+            text-align: initial;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            opacity: 1;
+            line-height: 1.0;
+            -webkit-text-size-adjust: none;
+            -webkit-transform-origin: 0% 0%;
+            transform-origin: 0% 0%;
+        }
+        .textLayer > span {
+            color: transparent;
+            position: absolute;
+            white-space: pre;
+            cursor: text;
+            transform-origin: 0% 0%;
+            user-select: text;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            pointer-events: auto;
+        }
+        .textLayer > span.highlight {
+            background-color: transparent !important;
+        }
+        .textLayer > span[style*="background-color: rgba(255, 255, 0, 0.2)"] {
+            background-color: transparent !important;
+        }
+        .textLayer > my-fra {
+            background-color: transparent;
+        }
+        .textLayer > my-fra[style*="background-color: rgba(255, 255, 0, 0.2)"] {
+            background-color: transparent !important;
+        }
+        .textLayer .highlight {
+            margin: -1px;
+            padding: 1px;
+            background-color: rgba(180, 0, 170, 0.2);
+            border-radius: 4px;
+        }
+        .textLayer .highlight.selected {
+            background-color: rgba(0, 100, 0, 0.2);
+        }
+        .textLayer ::-moz-selection {
+            background: rgba(0, 0, 255, 0.2);
+        }
+        .textLayer ::selection {
+            background: rgba(0, 0, 255, 0.2);
+        }
+		  .no-select {
+        user-select: none; /* 禁用反白選取 */
+        -webkit-user-select: none; /* 禁用反白選取 for Safari */
+        -moz-user-select: none; /* 禁用反白選取 for Firefox */
+        -ms-user-select: none; /* 禁用反白選取 for Internet Explorer/Edge */
+    }
+    
+    /* 模态窗口样式 */
+    .modal {
+      display: none;
+      /* 默认隐藏 */
+      position: fixed;
+      z-index: 900;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 500px;
+      background-color: white;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      padding: 20px;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    /* 遮罩层样式 */
+    .modal-overlay {
+      display: none;
+      /* 默认隐藏 */
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.05);
+      z-index: 900;
+    }
+
+    /* 按钮样式 */
+    .button {
+      padding: 10px 10px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    .button-secondary {
+      background-color: #6c757d;
+    }
+
+    .button-success {
+      background-color: #28a745;
+    }
+
+    .button-light {
+      background-color: #ded520;
+    }
+
+    .button-danger {
+      background-color: #dc3545;
+      
+    }
+     
+   my-fra {
+            display: inline; /* 確保不影響排版 */
+        }
+ input[type=range] {
+    -webkit-appearance: none;
+    width: 300px;
+    height: 20px;
+    background: linear-gradient(145deg, #d4d4d4, #f0f0f0);
+    border: 1px solid #b0b0b0;
+    border-radius: 10px;
+    outline: none;
+    opacity: 0.9;
+    -webkit-transition: .2s;
+    transition: opacity .2s;
+}
+
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 30px;
+    height: 30px;
+    background: linear-gradient(145deg, #4CAF50, #2E7D32);
+    border: 1px solid #2E7D32;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+}
+
+input[type=range]::-moz-range-thumb {
+    width: 30px;
+    height: 30px;
+    background: linear-gradient(145deg, #4CAF50, #2E7D32);
+    border: 1px solid #2E7D32;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+}
+#verticalDiv {
+            position: fixed;
+            top: 200px; /* 距離頂部50px */
+            right: 15px; /* 距離右側0px */
+            z-index: 1000;
+            display: flex;
+            flex-direction: column; /* 使內容縱向排列 */
+            align-items: center; /* 內容置中 */	
+			
+        }
+
+        #speakSpeed {
+		
+            z-index: 1000;
+            transform: rotate(-90deg); /* 旋轉滑軌 */
+            transform-origin: right center; /* 設置旋轉中心 */
+
+        }
+.swal2-container {
+    z-index: 999999 !important;
+}
+ /* SweetAlert2 高 z-index 樣式 */
+    .swal-high-z-index {
+        z-index: 9999 !important;
+    }
+
+    /* SweetAlert2 全域高 z-index，確保永遠在最上層 */
+    .swal2-container,
+    .swal2-popup,
+    .swal2-modal,
+    .swal2-backdrop,
+    .swal2-shown,
+    .swal2-height-auto,
+    .swal2-icon,
+    .swal2-title,
+    .swal2-content,
+    .swal2-actions,
+    .swal2-styled,
+    .swal2-close,
+    .swal2-validation-message,
+    .swal2-html-container,
+    .swal2-loader,
+    .swal2-progress-steps,
+    .swal2-backdrop-show,
+    .swal2-backdrop-hide,
+    .swal2-noanimation,
+    .swal2-toast {
+      z-index: 10010 !important;
+    }
+    </style>
+	  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+
+</head>
+<body tabindex="0">
+<div id="movable-frame"></div>
+<input type="file" id="pdfFileInput" style=" width: 20%; /* Increase width for better usability */  z-index: 1900;  position: fixed;  left: 20px; top:5px;">
+<div id="viewerContainer" tabindex="0">
+    <center><div id="pdfContainer"></div></center>
+</div>
+<div class="pagination" style="width: 100%; top: 5px; z-index: 1000;  position: fixed;">
+	<center>
+    <button id="prevPage">上一頁</button>
+    <span id="pageNumber"></span>
+    <button id="nextPage">下一頁</button>
+	</center>	
+</div>
+
+ <!-- 語速調整 -->
+ <div id="verticalDiv">	     
+<label for="speakSpeed" style="writing-mode: vertical-lr; display: flex; align-items: center; justify-content: center; height: 200px; position: fixed; top: 50px; right: 5px; color:black;font-size:16px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;">
+  <span id="speedValue" style="position: fixed; top: 100px; right: 0px;">
+    <span style="writing-mode: vertical-lr;">語速減</span>
+    <span style="writing-mode: horizontal-tb;">30%</span>
+  </span>
+</label>
+      <input type="range" id="speakSpeed" name="rate" min="-50" max="50" value="-30" oninput="updateRate(this.value)" style="  width:20%;  padding: 10px;  margin-bottom: 20px; z-index:1000;right:15px;position: fixed;">
+    </div>
+    
+<button id="toggle-button" style="position: fixed; width: 160px; height: 40px; bottom: 5px; left: 47%; z-index: 1000; color: black; font-size: 16px; font-weight: bold; color: rgb(134, 101, 224); font-size: 20px; text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px; display: flex; align-items: center; justify-content: center;">暫停</button>
+    
+  <button id="select-all-text" class="button button-light" style="writing-mode: vertical-rl; text-orientation: upright;z-index: 2000;position: fixed; bottom: 5px;right: 0%; z-index: 1100;color:black;font-size:16px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;" >整頁朗讀</button>
+  <!-- 页面遮罩 -->
+  <div id="modalOverlay" class="modal-overlay"></div>
+
+   <button id="sendButton" class="button button-light" style="writing-mode: vertical-rl; text-orientation: upright;position: fixed; bottom: 5px;right: 0%; z-index: 2000;color:black;font-size:20px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;display:none;">朗讀選取文字</button>
+  <button id="clearButton" class="button button-light" style="writing-mode: vertical-rl; text-orientation: upright;position: fixed; bottom: 5px;left: 0%; z-index: 2000;color:black;font-size:20px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;display:none;">清除選取文字</button>
+  <label style="writing-mode: vertical-rl; text-orientation: upright;position: fixed; top: 300px;left: 2px; z-index: 1000;color:black;font-size:16px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;">
+        <input type="checkbox" id="touchSelectCheckbox" style="writing-mode: vertical-rl; text-orientation: upright; width: 30px; height: 30px; position: fixed;left: 1px;top: 260px;">觸控選取</label>
+
+      <!-- 新增：手動清除快取按鈕 -->
+    <button id="clearCacheButton" class="button button-danger" style="writing-mode: vertical-rl; text-orientation: upright;position: fixed; left: 0px; top: 450px; z-index: 1100; font-size: 16px;">清除快取</button>
+
+    <!-- API KEY 設定按鈕 -->
+    <button id="apiKeySettingsButton" class="button button-secondary" style="position: fixed; top: 70px; left: 0px; z-index: 1; width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 20px; display: flex; align-items: center; justify-content: center;" title="設定 Gemini API KEY">🔑</button>
+
+    <!-- API KEY 設定模態視窗 -->
+    <div id="apiKeyModal" class="modal" style="display: none; z-index: 10020;">
+        <div style="padding: 20px;">
+            <h2 style="margin-top: 0;">設定圖片辨識用的 Gemini API KEY</h2>
+            <div style="margin-bottom: 15px;">
+                <label for="apiKeyInput" style="display: block; margin-bottom: 5px; font-weight: bold;">API KEY：</label>
+                <input type="password" id="apiKeyInput" placeholder="請輸入或掃描 QR Code" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 14px; box-sizing: border-box;">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <button id="scanQRButton" class="button button-success" style="width: 100%; margin-bottom: 10px;">📷 掃描 QR Code</button>
+                <div id="qrScannerContainer" style="display: none; margin-bottom: 15px;">
+                    <video id="qrVideo" style="width: 100%; max-width: 400px; border: 2px solid #ccc; border-radius: 5px; display: block; margin: 0 auto;"></video>
+                    <canvas id="qrCanvas" style="display: none;"></canvas>
+                    <button id="stopScanButton" class="button button-danger" style="width: 100%; margin-top: 10px;">停止掃描</button>
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button id="saveApiKeyButton" class="button button-success" style="flex: 1;">儲存</button>
+                <button id="cancelApiKeyButton" class="button button-secondary" style="flex: 1;">取消</button>
+            </div>
+        </div>
+    </div>
+    <div id="apiKeyModalOverlay" class="modal-overlay" style="z-index: 10019;"></div> 
+
+
+	
+  <div style=" position: fixed;  top: 30px; right:15px; z-index: 1900;">  
+<select id="voiceSelect"></select>
+</div>    
+     
+
+<button  class="button button-light" style="writing-mode: vertical-rl; text-orientation: upright;z-index: 2000;position: fixed; bottom: 5px;left: 0%; z-index: 1100;color:black;font-size:16px;font-weight:bold;color: rgb(134, 101, 224);font-size: 20px;text-shadow: rgb(204, 204, 204) 0px 1px 0px, rgb(201, 201, 201) 0px 2px 0px;" onclick="redirectToNewPage()">切換網路語音</button>
+
+
+<script>
+// 移除 BroadcastChannel 相關代碼，替換為以下實現
+
+// 頁數同步相關變量
+let pageSyncTimeout = null;
+const PAGE_SYNC_DELAY = 300; // 防遲延(毫秒)
+
+// 修改 notifyPageChange 函數
+function notifyPageChange(page) {
+    // 更新 URL hash
+    updateUrlHash(page);
+    
+    // 如果是 iframe 內嵌的情況，通知父窗口
+    if (window !== window.top) {
+        window.parent.postMessage({
+            type: 'pageChange',
+            page: page,
+            source: 'pdfViewer'
+        }, '*'); // 注意: 實際應用中應指定具體域名而非 '*'
+    }
+    
+    // 更新 localStorage
+    localStorage.setItem('currentPage', page);
+}
+
+//  更新URL hash (不觸發頁面刷新)
+function updateUrlHash(page) {
+    const newUrl = new URL(window.location.href);
+    newUrl.hash = `page=${page}`;
+    window.history.replaceState({}, '', newUrl);
+}
+// 獲取當前頁數 (從URL hash或localStorage)
+function getPageFromHash() {
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const pageFromHash = params.get('page') ? parseInt(params.get('page')) : null;
+    
+    // 從 localStorage 讀取作為備用
+    const pageFromStorage = localStorage.getItem('currentPage') ? parseInt(localStorage.getItem('currentPage')) : 1;
+    
+    return pageFromHash || pageFromStorage;
+}
+// 切換網路語音時保留當前檔案和頁數
+function redirectToNewPage() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams();
+    
+    // 保留所有現有參數
+    if (urlParams.get('file')) params.set('file', urlParams.get('file'));
+    if (urlParams.get('googlesheetid')) params.set('googlesheetid', urlParams.get('googlesheetid'));
+    
+    // 構建新URL
+    let newUrl = 'index.html';
+    if (params.toString()) newUrl += `?${params.toString()}`;
+    
+    // 保留當前頁數
+    const currentPage = getPageFromHash();
+    if (currentPage > 1) newUrl += `#page=${currentPage}`;
+    
+    window.location.href = newUrl;
+}
+// PDF.js 初始化
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
+
+const pdfFileInput = document.getElementById('pdfFileInput');
+const pdfContainer = document.getElementById('pdfContainer');
+const prevPageButton = document.getElementById('prevPage');
+const nextPageButton = document.getElementById('nextPage');
+const pageNumberSpan = document.getElementById('pageNumber');
+
+let pdfDoc = null;
+let currentPage = 1;
+
+// Function to render the page with dynamic width
+function renderPage(pageNum) {
+    if (!pdfDoc) return;
+
+    pdfDoc.getPage(pageNum).then(page => {
+        const screenWidth = window.innerWidth;
+        const desiredWidth = screenWidth * 0.95; // Keep 95% width
+        const viewport = page.getViewport({ scale: 1 });
+        const scale = desiredWidth / viewport.width;
+        const scaledViewport = page.getViewport({ scale: scale });
+
+        pdfContainer.innerHTML = '';
+
+        const pageContainer = document.createElement('div');
+        pageContainer.className = 'pdf-page-container';
+        pageContainer.style.position = 'relative';
+
+        const pdfViewer = document.createElement('div');
+        pdfViewer.className = 'pdf-viewer';
+        pdfViewer.style.position = 'relative';
+
+        const pdfCanvas = document.createElement('canvas');
+        const context = pdfCanvas.getContext('2d');
+
+        const dpi = window.devicePixelRatio || 1;
+        pdfCanvas.height = scaledViewport.height * dpi;
+        pdfCanvas.width = scaledViewport.width * dpi;
+        context.scale(dpi, dpi);
+
+        pdfCanvas.style.height = `${scaledViewport.height}px`;
+        pdfCanvas.style.width = `${scaledViewport.width}px`;
+        pdfCanvas.style.display = 'block';
+
+        const textLayerDiv = document.createElement('div');
+        textLayerDiv.className = 'textLayer';
+        textLayerDiv.style.width = `${scaledViewport.width}px`;
+        textLayerDiv.style.height = `${scaledViewport.height}px`;
+        textLayerDiv.style.position = 'absolute';
+        textLayerDiv.style.top = '0';
+        textLayerDiv.style.left = '0';
+        textLayerDiv.style.pointerEvents = 'none';
+
+        pageContainer.appendChild(pdfViewer);
+        pdfViewer.appendChild(pdfCanvas);
+        pdfViewer.appendChild(textLayerDiv);
+        pdfContainer.appendChild(pageContainer);
+
+        const renderContext = {
+            canvasContext: context,
+            viewport: scaledViewport
+        };
+
+        page.render(renderContext).promise.then(() => {
+            return page.getTextContent();
+        }).then(textContent => {
+            textLayerDiv.innerHTML = '';
+            pdfjsLib.renderTextLayer({
+                textContent: textContent,
+                container: textLayerDiv,
+                viewport: scaledViewport,
+                textDivs: [],
+                enhanceTextSelection: true
+            });
+
+            // 修正文字層的縮放和位置
+            const textElements = textLayerDiv.getElementsByTagName('span');
+            for (let span of textElements) {
+                const originalTransform = span.style.transform || '';
+                span.style.transform = originalTransform.replace(/scale\([^)]+\)/, `scale(${1/dpi})`);
+            }
+        });
+
+        pageNumberSpan.textContent = `Page ${pageNum} of ${pdfDoc.numPages}`;
+
+        const currentHash = window.location.hash;
+        const newHash = `page=${pageNum}`;
+        if (currentHash !== newHash) {
+            const newUrl = new URL(window.location.href);
+            newUrl.hash = newHash;
+            window.history.replaceState({}, '', newUrl);
+        }
+    });
+}
+
+// Event listener for orientation changes
+window.addEventListener('orientationchange', () => {
+    renderPage(currentPage);
+});
+
+// Initial render
+renderPage(currentPage);
+	
+// Google Apps Script 代理 URL（備用選項）
+const gasUrl = 'https://script.google.com/macros/s/AKfycbzOak3lHdg8lGSQSiLLk0kVK9IIC277xyVgU9hjykW0tRRcCE6si_-hMLfeLcwnvvNcHg/exec'; // 替換為你的 GAS 部署 URL
+
+// CORS 代理服務（台灣區友好）
+// 注意：免費代理服務可能不穩定，建議使用 Cloudflare Workers 自建代理
+// 自建代理教程：https://developers.cloudflare.com/workers/
+// 
+// 如果您已自建 Cloudflare Workers 代理，請將下面的 'YOUR_WORKER_URL' 替換為您的 Worker URL
+// 格式：'https://your-worker.your-subdomain.workers.dev/?url='
+const CORS_PROXIES = [
+    // 優先使用自建的 Cloudflare Workers 代理（最穩定可靠）
+    // 'https://YOUR_WORKER_URL?url=',  // 取消註解並填入您的 Worker URL
+    
+    // 以下為公開的免費代理服務（可能有速率限制或不穩定）
+    'https://api.allorigins.win/raw?url=',           // 免費，有速率限制
+    'https://api.codetabs.com/v1/proxy?quest='      // 免費，僅支援 GET 請求
+];
+
+
+// 打開 IndexedDB 資料庫
+const openDB = () => {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open('pdfDB', 3); // 升級到版本 3 以支持 settings
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            // 如果 objectStore 已存在，先刪除再重新創建以確保配置正確
+            if (db.objectStoreNames.contains('pdfFiles')) {
+                db.deleteObjectStore('pdfFiles');
+            }
+            // 重新創建 objectStore，確保使用 keyPath: 'id'
+            db.createObjectStore('pdfFiles', { keyPath: 'id' });
+            
+            // 創建設定 objectStore（如果不存在）
+            if (!db.objectStoreNames.contains('settings')) {
+                db.createObjectStore('settings', { keyPath: 'id' });
+            }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e.target.error);
+    });
+};
+
+// 保存檔案到 IndexedDB
+const saveFileToIndexedDB = async (file) => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('pdfFiles', 'readwrite');
+        const store = transaction.objectStore('pdfFiles');
+        
+        // 確保對象有 id 屬性，並等待 put 操作完成
+        const dataToStore = { id: 'currentPdf', file: file };
+        const putRequest = store.put(dataToStore);
+        
+        return new Promise((resolve, reject) => {
+            putRequest.onsuccess = () => {
+                // put 操作成功，等待 transaction 完成
+            };
+            putRequest.onerror = () => reject(putRequest.error);
+            
+            // 監聽 transaction 完成
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
+        });
+    } catch (error) {
+        console.error('保存檔案到 IndexedDB 失敗：', error);
+        throw error;
+    }
+};
+
+// 從 IndexedDB 讀取檔案
+const loadFileFromIndexedDB = async () => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('pdfFiles', 'readonly');
+        const store = transaction.objectStore('pdfFiles');
+        const request = store.get('currentPdf');
+        return new Promise((resolve, reject) => {
+            request.onsuccess = (e) => {
+                if (e.target.result) {
+                    resolve(e.target.result.file);
+                } else {
+                    reject(new Error('IndexedDB 中未找到檔案'));
+                }
+            };
+            request.onerror = (e) => reject(e.target.error);
+        });
+    } catch (error) {
+        console.error('從 IndexedDB 讀取檔案失敗：', error);
+        throw error;
+    }
+};
+
+// 清空 IndexedDB 中的檔案
+const clearIndexedDB = async (forceClear = false) => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('pdfFiles', 'readwrite');
+        const store = transaction.objectStore('pdfFiles');
+        if (forceClear) {
+            store.delete('currentPdf');
+        }
+        updateUrl(null);
+    } catch (error) {
+        console.error('清除 IndexedDB 失敗：', error);
+    }
+};
+
+// 保存 API KEY 到 IndexedDB
+const saveApiKeyToIndexedDB = async (apiKey) => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('settings', 'readwrite');
+        const store = transaction.objectStore('settings');
+        const dataToStore = { id: 'geminiApiKey', value: apiKey };
+        const putRequest = store.put(dataToStore);
+        
+        return new Promise((resolve, reject) => {
+            putRequest.onsuccess = () => {
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            };
+            putRequest.onerror = () => reject(putRequest.error);
+        });
+    } catch (error) {
+        console.error('保存 API KEY 到 IndexedDB 失敗：', error);
+        throw error;
+    }
+};
+
+// 從 IndexedDB 讀取 API KEY
+const loadApiKeyFromIndexedDB = async () => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('settings', 'readonly');
+        const store = transaction.objectStore('settings');
+        const request = store.get('geminiApiKey');
+        return new Promise((resolve, reject) => {
+            request.onsuccess = (e) => {
+                if (e.target.result) {
+                    resolve(e.target.result.value);
+                } else {
+                    resolve(null);
+                }
+            };
+            request.onerror = (e) => reject(e.target.error);
+        });
+    } catch (error) {
+        console.error('從 IndexedDB 讀取 API KEY 失敗：', error);
+        return null;
+    }
+};
+
+// 更新網址中的檔案名稱
+
+function updateUrl(fileName) {
+    const newUrl = new URL(window.location.href);
+    if (fileName) {
+        newUrl.searchParams.set('file', fileName); // 不使用 encodeURIComponent
+    } else {
+        newUrl.searchParams.delete('file');
+    }
+    window.history.replaceState({}, '', newUrl);
+}
+
+// 從 Google 雲端硬碟載入 PDF 檔案
+async function loadPdfFromDrive(fileId, showLoading = true) {
+    // 檢查是否是本地檔案名稱（包含 .pdf 結尾）
+    if (fileId && fileId.toLowerCase().endsWith('.pdf')) {
+        // 如果是本地檔案名稱，直接返回不處理
+        return;
+    }
+
+    const url = `${gasUrl}?fileId=${fileId}`;
+    
+    try {
+        if (showLoading) {
+            Swal.fire({
+                title: '載入中請稍候',
+                text: '正在從雲端硬碟載入檔案...',
+                allowOutsideClick: false,
+                didOpen: () => {
+                    Swal.showLoading();
+                }
+            });
+        }
+
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error('Failed to fetch file');
+        }
+        const data = await response.json();
+        const fileContent = atob(data.fileContent);
+        const arrayBuffer = new ArrayBuffer(fileContent.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < fileContent.length; i++) {
+            uint8Array[i] = fileContent.charCodeAt(i);
+        }
+        const blob = new Blob([uint8Array], { type: 'application/pdf' });
+        const file = new File([blob], data.fileName, { type: 'application/pdf' });
+        await saveFileToIndexedDB(file);
+        const typedarray = new Uint8Array(arrayBuffer);
+        pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+            pdfDoc = pdf;
+            renderPage(currentPage);
+            updateUrl(fileId);
+            if (showLoading) {
+                Swal.close();
+            }
+        }).catch(error => {
+            console.error('PDF 檔案載入失敗：', error);
+            Swal.fire({
+                icon: 'error',
+                title: '載入失敗',
+                text: '無法載入 PDF 檔案，請檢查檔案是否正確或未開放瀏覽。',
+            });
+        });
+    } catch (error) {
+        console.error('載入 Google 雲端硬碟 PDF 檔案失敗：', error);
+        if (showLoading) {
+            Swal.fire({
+                icon: 'error',
+                title: '載入失敗',
+                text: '無法載入 PDF 檔案，請檢查檔案 ID 是否正確或未開放瀏覽。',
+            });
+        }
+    }
+}
+// 當頁面載入時，檢查網址中的檔案名稱
+
+// 修改頁面初始化部分
+window.addEventListener('load', async () => {
+    // 從 URL hash 或 localStorage 讀取初始頁數
+    currentPage = getPageFromHash();
+    
+    // 原有的初始化代碼...
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileParam = urlParams.get('file');
+    const previousUrl = sessionStorage.getItem('previousUrl');
+    const currentUrl = window.location.href;
+
+    // 判斷是否為頁面重新整理
+    const isPageRefresh = previousUrl === currentUrl;
+
+    // 判斷 URL 是否以 .pdf 結尾（本地檔案）
+    const isLocalPdfFile = fileParam && fileParam.toLowerCase().endsWith('.pdf');
+
+    if (fileParam) {
+        if (fileParam.startsWith('http://') || fileParam.startsWith('https://')) {
+            // 處理網路 PDF 檔案
+            await clearIndexedDB();
+            loadPdfFromUrl(fileParam);
+        } else if (isLocalPdfFile) {
+            // 處理本地 PDF 檔案
+            try {
+                const file = await loadFileFromIndexedDB();
+                if (file && file.name === fileParam) {
+                    console.log('當前檔案與 URL 中的本地檔案相同，從 IndexedDB 載入');
+                    const fileReader = new FileReader();
+                    fileReader.onload = function() {
+                        const typedarray = new Uint8Array(this.result);
+                        pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                            pdfDoc = pdf;
+                            renderPage(currentPage);
+                        }).catch(error => {
+                            console.error('PDF 檔案載入失敗：', error);
+                            alert('無法載入 PDF 檔案，請檢查檔案是否正確或未開放瀏覽。');
+                        });
+                    };
+                    fileReader.onerror = function() {
+                        console.error('檔案讀取失敗：', fileReader.error);
+                        alert('檔案讀取失敗，請重試。');
+                    };
+                    fileReader.readAsArrayBuffer(file);
+                } else {
+                    console.log('IndexedDB 中沒有匹配的本地檔案，清除 URL 參數');
+                    updateUrl(null);
+                }
+            } catch (error) {
+                console.error('讀取本地檔案失敗：', error);
+                updateUrl(null);
+            }
+        } else {
+            // 處理 Google 雲端硬碟檔案
+            try {
+                const file = await loadFileFromIndexedDB();
+                if (file) {
+                    if (file.name === fileParam) {
+                        console.log('當前檔案與 URL 中的檔案相同，跳過重新載入。');
+                        const fileReader = new FileReader();
+                        fileReader.onload = function() {
+                            const typedarray = new Uint8Array(this.result);
+                            pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                                pdfDoc = pdf;
+                                renderPage(currentPage);
+                            }).catch(error => {
+                                console.error('PDF 檔案載入失敗：', error);
+                                alert('無法載入 PDF 檔案，請檢查檔案是否正確或未開放瀏覽。');
+                            });
+                        };
+                        fileReader.onerror = function() {
+                            console.error('檔案讀取失敗：', fileReader.error);
+                            alert('檔案讀取失敗，請重試。');
+                        };
+                        fileReader.readAsArrayBuffer(file);
+                    } else {
+                        await clearIndexedDB();
+                        await saveFileToIndexedDB(file);
+                        updateUrl(file.name);
+                    }
+                } else {
+                    await loadPdfFromDrive(fileParam, !isPageRefresh);
+                }
+            } catch (error) {
+                console.error('讀取檔案失敗：', error);
+                await loadPdfFromDrive(fileParam, !isPageRefresh);
+            }
+        }
+    }
+
+    // 更新 sessionStorage 中的 previousUrl
+    sessionStorage.setItem('previousUrl', currentUrl);
+});
+
+//  監聽頁數變化事件
+window.addEventListener('hashchange', function() {
+    const newPage = getPageFromHash();
+    if (newPage !== currentPage && newPage >= 1 && newPage <= (pdfDoc?.numPages || 1)) {
+        currentPage = newPage;
+        renderPage(currentPage);
+    }
+});
+
+// 當使用者選擇檔案時
+pdfFileInput.addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (file) {
+        try {
+            await clearIndexedDB(true);
+            await saveFileToIndexedDB(file);
+            
+            // 更新 URL 參數，標記為本地檔案
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.set('file', file.name);
+            window.history.replaceState({}, '', newUrl);
+            
+            const fileReader = new FileReader();
+            fileReader.onload = function() {
+                const typedarray = new Uint8Array(this.result);
+                pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                    pdfDoc = pdf;
+                    currentPage = 1; // 重置為第一頁
+                    renderPage(currentPage);
+                }).catch(error => {
+                    console.error('PDF 檔案載入失敗：', error);
+                    alert('無法載入 PDF 檔案，請檢查檔案是否正確或未開放瀏覽。');
+                });
+            };
+            fileReader.onerror = function() {
+                console.error('檔案讀取失敗：', fileReader.error);
+                alert('檔案讀取失敗，請重試。');
+            };
+            fileReader.readAsArrayBuffer(file);
+        } catch (error) {
+            console.error('保存檔案失敗：', error);
+            alert('保存檔案失敗，請重試。');
+        }
+    } else {
+        updateUrl(null);
+    }
+});
+
+// 修改 loadPdfFromDrive 函數，改為與 index2.html 相同的多路徑下載邏輯（直接、GAS、CORS 代理）
+async function loadPdfFromDrive(fileId, showLoading = true) {
+    // 檢查是否是本地檔案名稱（包含 .pdf 結尾）
+    if (fileId && fileId.toLowerCase().endsWith('.pdf')) {
+        console.log('檢測到本地檔案名稱，跳過 Google 雲端硬碟載入');
+        return;
+    }
+
+    if (showLoading) {
+        Swal.fire({
+            title: '載入中請稍候',
+            text: '正在從雲端硬碟載入檔案...',
+            allowOutsideClick: false,
+            didOpen: () => {
+                Swal.showLoading();
+            }
+        });
+    }
+
+    // Google Drive 下載連結（使用 confirm 參數避免確認頁面）
+    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
+    
+    let arrayBuffer = null;
+    let fileName = `file_${fileId}.pdf`;
+    
+    // 創建帶超時的 fetch 函數
+    const fetchWithTimeout = (url, options = {}, timeout = 5000) => {
+        return Promise.race([
+            fetch(url, options),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('請求超時')), timeout)
+            )
+        ]);
+    };
+    
+    // 構建所有可用的下載方式（並行嘗試）
+    const downloadPromises = [];
+    
+    // 1. 直接下載（快速失敗，不等待超時）
+    downloadPromises.push(
+        fetchWithTimeout(directUrl, { method: 'GET', redirect: 'follow' }, 3000)
+            .then(async (response) => {
+                if (response.ok) {
+                    const contentType = response.headers.get('content-type') || '';
+                    if (contentType.includes('application/pdf') || 
+                        contentType.includes('application/octet-stream')) {
+                        const contentDisposition = response.headers.get('content-disposition') || '';
+                        const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                        if (fileNameMatch && fileNameMatch[1]) {
+                            fileName = fileNameMatch[1].replace(/['"]/g, '');
+                        }
+                        return { source: 'direct', data: await response.arrayBuffer() };
+                    }
+                }
+                throw new Error('直接下載失敗');
+            })
+            .catch(() => null) // 靜默失敗，不影響其他嘗試
+    );
+    
+    // 2. 使用 GAS 代理（備用選項）
+    downloadPromises.push(
+        (async () => {
+            try {
+                const gasResponse = await fetchWithTimeout(
+                    `${gasUrl}?fileId=${fileId}`, 
+                    { method: 'GET' }, 
+                    10000
+                );
+                
+                if (gasResponse.ok) {
+                    const data = await gasResponse.json();
+                    if (data.fileContent && data.fileName) {
+                        // GAS 返回 base64 編碼的內容
+                        const fileContent = atob(data.fileContent);
+                        const buffer = new ArrayBuffer(fileContent.length);
+                        const uint8Array = new Uint8Array(buffer);
+                        for (let i = 0; i < fileContent.length; i++) {
+                            uint8Array[i] = fileContent.charCodeAt(i);
+                        }
+                        fileName = data.fileName;
+                        return { source: 'gas', data: buffer };
+                    }
+                }
+                throw new Error('GAS 代理回應錯誤');
+            } catch (error) {
+                return null; // 靜默失敗
+            }
+        })()
+    );
+    
+    // 3. 使用 CORS 代理（並行嘗試所有代理）
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+        // 跳過註解掉的代理
+        if (CORS_PROXIES[i].includes('YOUR_WORKER_URL') || CORS_PROXIES[i].trim() === '') {
+            continue;
+        }
+        
+        downloadPromises.push(
+            (async () => {
+                try {
+                    // 根據不同的代理服務構建正確的 URL
+                    let proxyUrl;
+                    const encodedUrl = encodeURIComponent(directUrl);
+                    
+                    if (CORS_PROXIES[i].includes('workers.dev')) {
+                        // Cloudflare Workers 格式: https://your-worker.workers.dev/?url=URL
+                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
+                    } else if (CORS_PROXIES[i].includes('allorigins.win')) {
+                        // allorigins.win 格式: https://api.allorigins.win/raw?url=URL
+                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
+                    } else if (CORS_PROXIES[i].includes('codetabs.com')) {
+                        // codetabs 格式: https://api.codetabs.com/v1/proxy?quest=URL
+                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
+                    } else {
+                        // 預設使用編碼的 URL
+                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
+                    }
+                    
+                    const proxyResponse = await fetchWithTimeout(proxyUrl, {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/pdf' }
+                    }, 10000); // 代理請求超時設為 10 秒
+                    
+                    if (proxyResponse.ok) {
+                        return { 
+                            source: `proxy_${i + 1}`, 
+                            data: await proxyResponse.arrayBuffer() 
+                        };
+                    }
+                    throw new Error(`代理 ${i + 1} 回應錯誤: ${proxyResponse.status}`);
+                } catch (error) {
+                    return null; // 靜默失敗
+                }
+            })()
+        );
+    }
+    
+    // 使用 Promise.allSettled 並行嘗試所有下載方式，獲取最快成功的結果
+    console.log(`並行嘗試 ${downloadPromises.length} 種下載方式...`);
+    const results = await Promise.allSettled(downloadPromises);
+    
+    // 找到第一個成功的結果
+    let downloadSuccess = false;
+    for (const result of results) {
+        if (result.status === 'fulfilled' && result.value !== null && result.value.data) {
+            arrayBuffer = result.value.data;
+            console.log(`✓ 下載成功，來源: ${result.value.source}`);
+            downloadSuccess = true;
+            break;
+        }
+    }
+    
+    if (!downloadSuccess || !arrayBuffer) {
+        console.error('所有下載方式都失敗');
+        throw new Error('無法從 Google 雲端硬碟下載檔案，請確認檔案已公開分享或檢查網路連線');
+    }
+
+    try {
+        // 將 ArrayBuffer 轉換為 File 並保存
+        const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await saveFileToIndexedDB(file);
+        
+        // 載入 PDF
+        const typedarray = new Uint8Array(arrayBuffer);
+        pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+            pdfDoc = pdf;
+            renderPage(currentPage);
+            updateUrl(fileId);
+            if (showLoading) {
+                Swal.close();
+            }
+        }).catch(error => {
+            console.error('PDF 檔案載入失敗：', error);
+            Swal.fire({
+                icon: 'error',
+                title: '載入失敗',
+                text: '無法載入 PDF 檔案，請檢查檔案是否正確或未開放瀏覽。',
+            });
+        });
+    } catch (error) {
+        console.error('處理 PDF 檔案失敗：', error);
+        if (showLoading) {
+            Swal.fire({
+                icon: 'error',
+                title: '載入失敗',
+                text: '無法載入 PDF 檔案，請檢查檔案 ID 是否正確或檔案是否已公開分享。',
+            });
+        }
+    }
+}
+// 上一頁和下一頁按鈕的事件監聽
+// 修改上一頁/下一頁按鈕事件
+prevPageButton.addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage--;
+        renderPage(currentPage);
+        notifyPageChange(currentPage);
+    }
+});
+
+nextPageButton.addEventListener('click', () => {
+    if (pdfDoc && currentPage < pdfDoc.numPages) {
+        currentPage++;
+        renderPage(currentPage);
+        notifyPageChange(currentPage);
+    }
+});
+// 監聽跨網域消息
+window.addEventListener('message', function(event) {
+    if (event.data?.type === 'pageChange' && event.data.source !== 'pdfViewer') {
+        const newPage = event.data.page;
+        if (newPage !== currentPage && newPage >= 1 && newPage <= (pdfDoc?.numPages || 1)) {
+            currentPage = newPage;
+            renderPage(currentPage);
+            updateUrlHash(currentPage);
+        }
+    }
+});
+
+
+// 從 URL 參數中讀取 PDF 檔案的 ID
+const urlParams = new URLSearchParams(window.location.search);
+const fileId = urlParams.get('file');
+if (fileId) {
+    loadPdfFromDrive(fileId);
+}
+// 新增：手動清除快取按鈕功能
+const clearCacheButton = document.getElementById('clearCacheButton');
+if (clearCacheButton) {
+    clearCacheButton.addEventListener('click', async () => {
+        await clearIndexedDB(true);
+        Swal.fire({
+            icon: 'success',
+            title: '已清除PDF快取',
+            text: 'PDF 快取已清除，請重新載入檔案。',
+            timer: 1500,
+            showConfirmButton: false
+        });
+    });
+}
+</script>
+ <script>
+       window.onload = function () {
+            //取得瀏覽器支援的語音語調
+            function populateVoiceList() {
+                if (typeof speechSynthesis === "undefined") {
+                    return;
+                }
+                const voices = speechSynthesis.getVoices();
+                const voiceSelect = document.getElementById("voiceSelect");
+                voiceSelect.innerHTML = ""; // 清空舊選項
+
+                // 判斷是否為 iOS 裝置
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+                if (isIOS) {
+                    // 僅顯示「中文(美佳)」與「英文(Samantha)」
+                    let zhVoice = voices.find(v => v.lang === "zh-TW" && v.name === "美佳");
+                    if (zhVoice) {
+                        const option = document.createElement("option");
+                        option.textContent = `中文 (${zhVoice.name})`;
+                        option.setAttribute("data-lang", zhVoice.lang);
+                        option.setAttribute("data-name", zhVoice.name);
+                        voiceSelect.appendChild(option);
+                    }
+                    let enVoice = voices.find(v => v.lang === "en-US" && v.name === "Samantha");
+                    if (enVoice) {
+                        const option = document.createElement("option");
+                        option.textContent = `英文 (${enVoice.name})`;
+                        option.setAttribute("data-lang", enVoice.lang);
+                        option.setAttribute("data-name", enVoice.name);
+                        voiceSelect.appendChild(option);
+                    }
+                } else {
+                    // 顯示所有 zh-TW 語音
+                    voices.filter(v => v.lang === "zh-TW").forEach(v => {
+                        const option = document.createElement("option");
+                        option.textContent = `中文 (${v.name})` + (v.default ? " — DEFAULT" : "");
+                        option.setAttribute("data-lang", v.lang);
+                        option.setAttribute("data-name", v.name);
+                        voiceSelect.appendChild(option);
+                    });
+                    // 顯示所有 en-US 語音
+                    voices.filter(v => v.lang === "en-US").forEach(v => {
+                        const option = document.createElement("option");
+                        option.textContent = `英文 (${v.name})` + (v.default ? " — DEFAULT" : "");
+                        option.setAttribute("data-lang", v.lang);
+                        option.setAttribute("data-name", v.name);
+                        voiceSelect.appendChild(option);
+                    });
+                }
+            }
+
+            populateVoiceList();
+            if (
+                typeof speechSynthesis !== "undefined" &&
+                speechSynthesis.onvoiceschanged !== undefined
+            ) {
+                speechSynthesis.onvoiceschanged = populateVoiceList;
+            }
+        }
+
+ 
+
+
+  let selectedFile = null;
+
+  
+  let isListening = true; // 初始設置為監聽模式
+  let isReading = false; // 初始設置為未閱讀狀態
+  let audioPlayer = null;
+  document.addEventListener('DOMContentLoaded', () => {
+    
+audioPlayer = document.getElementById('audio-player');
+    
+    const findInput = document.getElementById('findInput'); // 獲取輸入欄位
+    const findEntireWord = document.getElementById('findEntireWord'); // 獲取 Whole Words 勾選框
+    let isFinding = false; // 用於追蹤是否有未完成的查找操作
+
+        function getSheetIdFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('googlesheetid');
+        }
+
+function fetchSheetData(sheetId, callback) {
+            const base = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?`;
+            const query = encodeURIComponent('Select *');
+            const url = `${base}&tq=${query}`;
+
+            fetch(url)
+                .then(res => res.text())
+                .then(rep => {
+                    const data = JSON.parse(rep.substr(47).slice(0, -2));
+                    callback(data.table.rows);
+                })
+                .catch(err => console.error('Error fetching data:', err));
+        }
+
+        function replaceTextUsingSheetData(text, sheetData) {
+            sheetData.forEach(row => {
+                const originalWord = row.c[1].v;
+                const replacementWord = row.c[2].v;
+                const regex = new RegExp(originalWord, 'g');
+                text = text.replace(regex, replacementWord);
+            });
+            return text;
+        }
+
+
+
+
+
+       function sendTextToTTS(selectedText, callback) {
+    // 簡單去除所有空白字符（包括空格、換行、製表符等）
+    const cleanedText = selectedText.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    const sheetId = getSheetIdFromUrl();
+    if (sheetId) {
+        fetchSheetData(sheetId, (sheetData) => {
+            const filteredText = replaceTextUsingSheetData(cleanedText, sheetData);
+            console.log("送出給 TTS 的文本:", filteredText);
+
+            const voiceName = selectedVoice;
+            const voiceLang = selectedVoice === '1' ? 'zh-TW' : 'en-US';
+            const ratePercent = parseFloat(selectedRate);
+
+            setTimeout(() => {
+                speakText(filteredText, voiceName, voiceLang, ratePercent, callback);
+            }, 100);
+        });
+    } else {
+        console.log("送出給 TTS 的文本:", cleanedText);
+
+        const voiceName = selectedVoice;
+        const voiceLang = selectedVoice === '1' ? 'zh-TW' : 'en-US';
+        const ratePercent = parseFloat(selectedRate);
+
+        setTimeout(() => {
+            speakText(cleanedText, voiceName, voiceLang, ratePercent, callback);
+        }, 100);
+    }
+}
+
+        function sendAllTextToTTS(selectedText, callback) {
+            const sheetId = getSheetIdFromUrl();
+            if (sheetId) {
+                fetchSheetData(sheetId, (sheetData) => {
+                    const filteredText = replaceTextUsingSheetData(selectedText, sheetData);
+                    console.log("送出給 TTS 的文本:", filteredText);
+
+                    const voiceName = selectedVoice;
+                    const voiceLang = selectedVoice === '1' ? 'zh-TW' : 'en-US';
+                    const ratePercent = parseFloat(selectedRate);
+
+                    setTimeout(() => {
+                        speakText(filteredText, voiceName, voiceLang, ratePercent, callback);
+                    }, 100);
+                });
+            } else {
+                console.log("送出給 TTS 的文本:", selectedText);
+
+                const voiceName = selectedVoice;
+                const voiceLang = selectedVoice === '1' ? 'zh-TW' : 'en-US';
+                const ratePercent = parseFloat(selectedRate);
+
+                setTimeout(() => {
+                    speakText(selectedText, voiceName, voiceLang, ratePercent, callback);
+                }, 100);
+            }
+        }
+
+        const toggleButton = document.getElementById('toggle-button');
+        const cancelButton = document.getElementById('cancel-button');
+
+        toggleButton.addEventListener('click', function() {
+            if (toggleButton.textContent === '暫停') {
+                window.speechSynthesis.pause();
+                toggleButton.textContent = '繼續';
+            } else {
+                window.speechSynthesis.resume();
+                toggleButton.textContent = '暫停';
+            }
+        });
+
+        function speakText(text, voiceName, voiceLang, ratePercent, onEndCallback) {
+            const synth = window.speechSynthesis;
+            const utterance = new SpeechSynthesisUtterance(text);
+
+            const rate = 1 + (ratePercent / 100);
+            utterance.rate = rate;
+
+            const voices = synth.getVoices();
+            const selectedVoice = document.getElementById("voiceSelect").selectedOptions[0].getAttribute("data-name");
+            if (selectedVoice) {
+                utterance.voice = speechSynthesis.getVoices().find(voice => voice.name === selectedVoice);
+            }
+
+            utterance.onend = onEndCallback;
+            speechSynthesis.speak(utterance);
+        }
+
+// 確保語音列表已加載
+window.speechSynthesis.onvoiceschanged = function() {
+    // 語音列表已加載，可以調用 speakText 函數
+};
+
+
+const selectAllTextButton = document.getElementById('select-all-text');
+let sentences = [];
+let currentSentenceIndex = 0;
+let isReading = false;
+
+selectAllTextButton.addEventListener('click', function() {
+    clearHighlights();
+    if (isReading) {
+        // 取消朗讀
+        cancelReading();
+    } else {
+        // 開始朗讀
+        window.speechSynthesis.cancel();
+        const pdfContainer = document.getElementById('pdfContainer');
+        const textLayers = pdfContainer.getElementsByClassName('textLayer');
+        let fullText = '';
+        for (let textLayer of textLayers) {
+            const spans = textLayer.getElementsByTagName('span');
+            for (let span of spans) {
+                fullText += span.textContent + ' ';
+            }
+        }
+        const cleanedText = fullText.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+        sentences = cleanedText.split(/(?<=[。！？])/); // 根據標點符號分句
+        currentSentenceIndex = 0;
+        isReading = true;
+        selectAllTextButton.textContent = "取消朗讀";
+        selectAllTextButton.classList.remove('button-light');
+        selectAllTextButton.classList.add('button-danger');
+        startReading(); // 直接開始朗讀
+    }
+});
+
+function cancelReading() {
+    window.speechSynthesis.cancel(); // 取消所有正在進行的朗讀
+    isReading = false;
+    selectAllTextButton.textContent = "整頁朗讀";
+    selectAllTextButton.classList.remove('button-danger');
+    selectAllTextButton.classList.add('button-light');
+    clearHighlights();
+}
+
+function startReading() {
+    if (sentences.length > 0) {
+        readNextSentence();
+    } else {
+        console.error('沒有可朗讀的句子');
+    }
+}
+
+function readNextSentence() {
+    if (isReading && currentSentenceIndex < sentences.length) {
+        const sentence = sentences[currentSentenceIndex];
+        highlightCurrentSentence(sentence);
+        sendTextToTTS(sentence, function() {
+            currentSentenceIndex++;
+            if (currentSentenceIndex < sentences.length) {
+                readNextSentence();
+            } else {
+                isReading = false;
+                clearHighlights();
+                selectAllTextButton.textContent = "整頁朗讀";
+                selectAllTextButton.classList.remove('button-danger');
+                selectAllTextButton.classList.add('button-light');
+            }
+        });
+    }
+}
+
+function highlightCurrentSentence(sentence) {
+    const pdfContainer = document.getElementById('pdfContainer');
+    const textLayers = pdfContainer.getElementsByClassName('textLayer');
+    let spansArray = [];
+
+    for (let textLayer of textLayers) {
+        const spans = textLayer.getElementsByTagName('my-fra');
+        for (let span of spans) {
+            spansArray.push(span);
+        }
+    }
+
+    // 清除前一句的標示
+    for (let span of spansArray) {
+        span.style.backgroundColor = '';
+    }
+
+    const sentences = sentence.split(/([。！？])/);
+    const cleanedSentences = [];
+    for (let i = 0; i < sentences.length; i += 2) {
+        const sentenceText = sentences[i] + (sentences[i + 1] || '');
+        const cleanedSentence = sentenceText.replace(/\s+/g, '');
+        if (cleanedSentence) {
+            cleanedSentences.push(cleanedSentence);
+        }
+    }
+
+    let currentIndex = 0;
+    for (let s = 0; s < cleanedSentences.length; s++) {
+        const cleanedSentence = cleanedSentences[s];
+        let sentenceIndex = 0;
+
+        while (currentIndex < spansArray.length && sentenceIndex < cleanedSentence.length) {
+            const span = spansArray[currentIndex];
+            const char = span.textContent.trim();
+
+            if (char === '') {
+                currentIndex++;
+                continue;
+            }
+
+            if (char === cleanedSentence[sentenceIndex]) {
+                span.style.backgroundColor = 'rgba(255, 255, 0, 0.2)';
+                sentenceIndex++;
+            } else {
+                for (let i = currentIndex - sentenceIndex; i < currentIndex; i++) {
+                    spansArray[i].style.backgroundColor = '';
+                }
+                sentenceIndex = 0;
+            }
+
+            currentIndex++;
+        }
+
+        if (sentenceIndex >= cleanedSentence.length) {
+            console.log(`句子 ${s + 1} 標示完成: ${cleanedSentence}`);
+        } else {
+            console.error(`句子 ${s + 1} 標示失敗: ${cleanedSentence}`);
+        }
+    }
+}
+
+function clearHighlights() {
+    const textLayerDivs = document.getElementById('viewerContainer').getElementsByClassName('textLayer');
+    
+    for (let textLayer of textLayerDivs) {
+        const spans = textLayer.getElementsByTagName('my-fra');
+        for (let span of spans) {
+            window.speechSynthesis.cancel();
+            span.style.backgroundColor = '';
+            span.dataset.spoken = '';
+        }
+    }
+}
+// 可移動框的功能
+const frame = document.getElementById('movable-frame');
+let isDragging = false;
+let startX, startY;
+
+// Add CSS styles for frame and resize buttons
+const style = document.createElement('style');
+style.innerHTML = `
+  #movable-frame {
+    position: absolute;
+    width: 50px;
+    height: 50px;
+    border: 6px solid red;
+    background-color: transparent;
+    border-radius: 15px; /* Adjust the value to change the roundness */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Adding shadow */   
+    z-index: 2000;
+}
+ .resize-button {
+    position: absolute;
+    width: 0;
+    height: 0;
+    cursor: pointer;
+    z-index: 2000;   
+  } 
+  #resize-bottom {
+    width: 80px;
+    height: 50px;
+    background-color: orange;
+    border-radius: 0 0 50px 50px; /* Bottom half-circle */
+    position: absolute;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Adding shadow */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white; /* Text color */
+    font-size: 36px; /* Text size */
+    z-index: 2000;
+  }
+  #resize-right {
+    width: 50px;
+    height: 80px;
+    background-color: orange;
+    border-radius: 0 50px 50px 0; /* Right half-circle */
+    position: absolute;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Adding shadow */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white; /* Text color */
+    font-size: 36px; /* Text size */
+    white-space: pre-wrap; /* Allow text to wrap */ 
+    z-index: 2000;
+  }
+  #read-button {
+    position: absolute;
+    padding: 5px 10px;
+    background-color: orange;
+    color: blue;
+    border: none;
+    cursor: pointer;
+    z-index: 2000;
+    width: 90px;
+    height: 40px;
+    font-size:15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3); /* Adding shadow */
+    border-top-left-radius: 15px; /* Top-left corner roundness */
+    border-top-right-radius: 15px; /* Top-right corner roundness */
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5); /* Text shadow */    
+  }
+`;
+document.head.appendChild(style);
+
+// Add resize buttons
+const buttons = [
+  { direction: 'bottom' },
+  { direction: 'right' }
+];
+buttons.forEach(({ direction }) => {
+  const button = document.createElement('div');
+  button.classList.add('resize-button');
+  button.id = `resize-${direction}`;
+  document.body.appendChild(button);
+});
+
+// Add read button
+const readButton = document.createElement('button');
+readButton.id = 'read-button';
+readButton.textContent = '框選朗讀';
+document.body.appendChild(readButton);
+function initializeFramePosition() {
+  const frame = document.getElementById('movable-frame');
+  frame.style.top = `${frame.offsetTop + 90}px`; // 向上移動 40px
+  frame.style.left = `${frame.offsetLeft - 20}px`; // 向上移動 40px
+}
+
+// 更新按鈕位置
+function updateButtonPositions() {
+  const frame = document.getElementById('movable-frame');
+
+  document.getElementById('resize-bottom').style.top = `${frame.offsetTop + frame.offsetHeight}px`;
+  document.getElementById('resize-bottom').style.left = `${frame.offsetLeft + frame.offsetWidth / 2 - 40}px`; // Adjusted for new width
+  document.getElementById('resize-right').style.top = `${frame.offsetTop + frame.offsetHeight / 2 - 40}px`; // Adjusted for new height
+  document.getElementById('resize-right').style.left = `${frame.offsetLeft + frame.offsetWidth}px`;
+  document.getElementById('read-button').style.top = `${frame.offsetTop - 40}px`; // Position above the frame
+  document.getElementById('read-button').style.left = `${frame.offsetLeft + frame.offsetWidth / 2 - 45}px`; // Centered above the frame
+
+  // Add text to the buttons
+  document.getElementById('resize-bottom').textContent = '↕';
+  document.getElementById('resize-right').textContent = '↔';
+
+  // Center the text within the buttons
+  document.getElementById('resize-bottom').style.display = 'flex';
+  document.getElementById('resize-bottom').style.alignItems = 'center';
+  document.getElementById('resize-bottom').style.justifyContent = 'center';
+  
+  document.getElementById('resize-right').style.display = 'flex';
+  document.getElementById('resize-right').style.alignItems = 'center';
+  document.getElementById('resize-right').style.justifyContent = 'center';
+}
+
+// 初始化框的位置
+initializeFramePosition();
+
+frame.addEventListener('mousedown', (e) => {
+  if (e.target.classList.contains('resize-button') || e.target.id === 'read-button') return;
+  isDragging = true;
+  startX = e.clientX - frame.offsetLeft;
+  startY = e.clientY - frame.offsetTop;
+  e.preventDefault(); // Prevent page scrolling
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (isDragging) {
+    frame.style.left = `${e.clientX - startX}px`;
+    frame.style.top = `${e.clientY - startY}px`;
+    updateButtonPositions();
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  isDragging = false;
+});
+
+frame.addEventListener('touchstart', (e) => {
+  if (e.target.classList.contains('resize-button') || e.target.id === 'read-button') return;
+  isDragging = true;
+  const touch = e.touches[0];
+  startX = touch.clientX - frame.offsetLeft;
+  startY = touch.clientY - frame.offsetTop;
+  e.preventDefault(); // Prevent page scrolling
+});
+
+document.addEventListener('touchmove', (e) => {
+  if (isDragging) {
+    const touch = e.touches[0];
+    frame.style.left = `${touch.clientX - startX}px`;
+    frame.style.top = `${touch.clientY - startY}px`;
+    updateButtonPositions();
+  }
+});
+
+document.addEventListener('touchend', () => {
+  isDragging = false;
+});
+
+// Read button click event
+readButton.addEventListener('click', readTextInsideFrame);
+
+updateButtonPositions();
+ 
+// 輔助函數：canvas 轉 base64，供 Gemini 圖片辨識用
+function canvasToBase64(canvas) {
+    return canvas.toDataURL("image/png").split(',')[1];
+}
+
+// 輔助函數：Gemini 圖片辨識
+async function geminiImageDescribe(base64Image) {
+    try {
+        // 從 IndexedDB 讀取 API KEY，如果沒有則使用預設值
+        let apiKey = await loadApiKeyFromIndexedDB();
+        if (!apiKey) {
+            apiKey = ''; // 預設 API KEY
+        }
+        
+        console.log('開始調用 Gemini API，API KEY 長度:', apiKey.length);
+        
+        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: "你是一個給學習障礙學生報讀考題的報讀員，不要產生 markdown 的 * 符號，請先讀出圖片中的所有文字，遇到科學或數學符號請轉成中文文字的讀法，遇到數學分數時以中文讀法表示，如:幾分之幾，數學式子無須再特別說明它是一個公式，如果這些文字與圖片內容有關，請合併描述。然後用簡單句子描述圖片中的物件，不要贅述，不要描述場景、整體佈局或風格，如果文字部分已能呈現全部，描述完不要再重複陳述圖片元素，如:弟弟吃了八分之五盒雞塊，圖片中，顯示了一行中文字和一個分數，圖片中......以後就是贅述。遇到英文字請如實呈現，不要把X讀成艾克斯。" },
+                            { inline_data: { mime_type: "image/png", data: base64Image } }
+                        ]
+                    }
+                ]
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Gemini API 回應錯誤:', response.status, errorText);
+            throw new Error(`API 請求失敗 (${response.status}): ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Gemini API 回應:', data);
+        
+        if (data.error) {
+            console.error('Gemini API 錯誤:', data.error);
+            throw new Error(data.error.message || 'API 返回錯誤');
+        }
+        
+        if (data.candidates && data.candidates.length > 0) {
+            const text = data.candidates[0].content.parts[0].text;
+            console.log('辨識結果:', text);
+            return text;
+        } else {
+            throw new Error('API 回應中沒有辨識結果');
+        }
+    } catch (error) {
+        console.error('Gemini 圖片辨識錯誤:', error);
+        throw error; // 重新拋出錯誤，讓調用者處理
+    }
+}
+
+function isCanvasAllWhite(canvas) {
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 0; i < imageData.length; i += 4) {
+        if (!(imageData[i] === 255 && imageData[i+1] === 255 && imageData[i+2] === 255 && imageData[i+3] === 255)) {
+            return false;
+        }
+    }
+    return true;
+}
+async function readTextInsideFrame() {
+    window.speechSynthesis.cancel();
+    const frameRect = frame.getBoundingClientRect();
+    const viewerContainer = document.getElementById('viewerContainer');
+    const pdfCanvas = viewerContainer.querySelector('canvas');
+
+    // 先抓 PDF 文字層
+    const textLayerDivs = viewerContainer.getElementsByClassName('textLayer');
+    let textInsideFrame = '';
+
+    for (let textLayer of textLayerDivs) {
+        const spans = textLayer.getElementsByTagName('my-fra');
+        for (let span of spans) {
+            const spanRect = span.getBoundingClientRect();
+            if (isInsideFrame(spanRect, frameRect)) {
+                span.style.backgroundColor = 'rgba(255, 255, 0, 0.2)';
+                textInsideFrame += span.textContent + '';
+            }
+        }
+    }
+const cleanedText = textInsideFrame.trim().replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    // 取得圖片 base64
+    let base64Image = null;
+    let croppedCanvas = null;
+    if (pdfCanvas) {
+        croppedCanvas = cropCanvas(pdfCanvas, frameRect);
+        base64Image = canvasToBase64(croppedCanvas);
+    }
+
+    // 判斷是否有圖片內容
+    let hasImageContent = false;
+    if (croppedCanvas && !isCanvasAllWhite(croppedCanvas)) {
+        hasImageContent = true;
+    }
+
+    // 判斷內容
+    if (!hasImageContent && cleanedText.length === 0) {
+        Swal.fire({
+            icon: 'warning',
+            title: '沒有內容',
+            text: '框選區域內沒有文字或圖片'
+        });
+        return;
+    }
+
+    // 只要有 PDF 文字層，就只朗讀純文字，不送圖片給 AI
+    if (cleanedText.length > 0) {
+        await new Promise((resolve, reject) => {
+            sendTextToTTS(cleanedText, () => {
+                resolve();
+            });
+        });
+        return;
+    }
+
+    // 沒有 PDF 文字層，才送圖片給 AI
+    if (hasImageContent) {
+        // 在 iOS 上，需要在用戶交互的同步上下文中立即獲取音頻播放權限
+        // 通過播放"圖片辨識中，請稍候。"來獲取權限，同時給用戶提示
+        let permissionObtained = false;
+        
+        // 立即在用戶交互上下文中播放"圖片辨識中，請稍候。"以獲取權限
+        sendTextToTTS('圖片辨識中，請稍候。', () => {
+            permissionObtained = true;
+            console.log('播放權限已獲取，開始圖片辨識');
+        });
+        
+        try {
+            Swal.fire({
+                title: '正在辨識圖片',
+                text: '正在使用 AI 辨識圖片內容...（Gemini）',
+                allowOutsideClick: false,
+                customClass: {
+                    popup: 'swal-high-z-index'
+                },
+                didOpen: () => {
+                    Swal.showLoading();
+                }
+            });
+            const aiDescription = await geminiDescribeTextAndImage([{ inline_data: { mime_type: "image/png", data: base64Image } }]);
+            Swal.close();
+            //console.log('Gemini 原始回傳:', aiDescription);
+            if (aiDescription && aiDescription.length > 0) {
+                // 等待"圖片辨識中，請稍候。"播放完成（或至少等待一小段時間確保權限已獲取）
+                // 如果還在播放，停止它
+                window.speechSynthesis.cancel();
+                
+                // 直接使用 Gemini 原始回傳，不進行任何清理
+                // 此時已經獲取了播放權限，可以自動播放
+                await new Promise((resolve, reject) => {
+                    sendTextToTTS(aiDescription, () => {
+                        console.log('圖片辨識文字朗讀完成');
+                        resolve();
+                    });
+                });
+            } else {
+                console.error('Gemini 回傳的內容為空');
+                Swal.fire({
+                    icon: 'warning',
+                    title: '辨識結果為空',
+                    text: 'AI 無法辨識圖片內容'
+                });
+            }
+        } catch (error) {
+            console.error('Gemini 辨識失敗:', error);
+            Swal.fire({
+                icon: 'error',
+                title: '辨識失敗',
+                text: 'AI 辨識過程中發生錯誤。'
+            });
+        }
+        return;
+    }
+}
+
+// 新增：同時處理文字和圖片的 Gemini 辨識
+async function geminiDescribeTextAndImage(parts) {
+    try {
+        // 從 IndexedDB 讀取 API KEY，如果沒有則使用預設值
+        let apiKey = await loadApiKeyFromIndexedDB();
+        if (!apiKey) {
+            apiKey = ''; // 預設 API KEY
+        }
+        
+        console.log('開始調用 Gemini API，API KEY 長度:', apiKey.length);
+        
+        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: "你是一個給學習障礙學生報讀考題的報讀員，不要產生 markdown 的 * 符號，請先讀出圖片中的所有文字，遇到科學或數學符號請轉成中文文字的讀法，遇到數學分數時以中文讀法表示，如:幾分之幾，數學式子無須再特別說明它是一個公式，如果這些文字與圖片內容有關，請合併描述。然後用簡單句子描述圖片中的物件，不要贅述，不要描述場景、整體佈局或風格，如果文字部分已能呈現全部，描述完不要再重複陳述圖片元素，如:弟弟吃了八分之五盒雞塊，圖片中，顯示了一行中文字和一個分數，圖片中......以後就是贅述。遇到英文字請如實呈現，不要把X讀成艾克斯。" },
+                            ...parts
+                        ]
+                    }
+                ]
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Gemini API 回應錯誤:', response.status, errorText);
+            throw new Error(`API 請求失敗 (${response.status}): ${errorText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Gemini API 回應:', data);
+        
+        if (data.error) {
+            console.error('Gemini API 錯誤:', data.error);
+            throw new Error(data.error.message || 'API 返回錯誤');
+        }
+        
+        if (data.candidates && data.candidates.length > 0) {
+            const text = data.candidates[0].content.parts[0].text;
+            console.log('辨識結果:', text);
+            return text;
+        } else {
+            throw new Error('API 回應中沒有辨識結果');
+        }
+    } catch (error) {
+        console.error('Gemini 圖片辨識錯誤:', error);
+        throw error; // 重新拋出錯誤，讓調用者處理
+    }
+}
+// 輔助函數：檢查元素是否在框內
+function isInsideFrame(elementRect, frameRect) {
+  return (
+    elementRect.top >= frameRect.top &&
+    elementRect.bottom <= frameRect.bottom &&
+    elementRect.left >= frameRect.left &&
+    elementRect.right <= frameRect.right
+  );
+}
+
+// 輔助函數：裁剪canvas區域（不遮蔽 PDF 文字層）
+function cropCanvas(sourceCanvas, cropRect) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  
+  // 計算裁剪區域（考慮設備像素比）
+  const dpr = window.devicePixelRatio || 1;
+  const cropX = (cropRect.left - sourceCanvas.getBoundingClientRect().left) * dpr;
+  const cropY = (cropRect.top - sourceCanvas.getBoundingClientRect().top) * dpr;
+  const cropWidth = cropRect.width * dpr;
+  const cropHeight = cropRect.height * dpr;
+  
+  // 設置新canvas大小
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
+  
+  // 裁剪並繪製到新canvas
+  ctx.drawImage(
+    sourceCanvas,
+    cropX, cropY, cropWidth, cropHeight,
+    0, 0, cropWidth, cropHeight
+  );
+  return canvas;
+}
+  let lastTouchElement = null;
+
+ function wrapTextInFraTags() {
+    const markedContentSpans = document.querySelectorAll('span[role="presentation"]');
+    let charIndex = 0; // 用於追蹤全局字符位置
+    markedContentSpans.forEach(span => {
+        if (!span.dataset.processed) {
+            const text = span.textContent;
+            const fragment = document.createDocumentFragment();
+            for (let char of text) {
+                const fra = document.createElement('my-fra');
+                fra.textContent = char;
+                fra.style.cursor = 'pointer';
+                fra.dataset.index = charIndex++; // 添加 data-index
+                fra.addEventListener('touchstart', highlightText);
+                fra.addEventListener('touchmove', highlightText);
+                fra.addEventListener('mousedown', startHighlight);
+                fra.addEventListener('mousemove', highlightText);
+                fragment.appendChild(fra);
+            }
+            span.innerHTML = '';
+            span.appendChild(fragment);
+            span.dataset.processed = 'true';
+        }
+    });
+}
+let isMouseDown = false;
+
+function startHighlight(event) {
+    isMouseDown = true;
+    highlightText(event);
+}
+
+document.addEventListener('mouseup', () => {
+    isMouseDown = false;
+});
+     function highlightText(event) {
+     
+    if (!document.getElementById('touchSelectCheckbox').checked) return; // 檢查核取方塊是否被選中
+    if (event.type === 'mousemove' && !isMouseDown) return; // 只有在按住滑鼠左鍵時才觸發
+    
+   event.preventDefault(); // 防止平板左右或上下捲動
+    
+    let element;
+    if (event.type === 'touchstart' || event.type === 'touchmove') {
+        const touch = event.touches[0];
+        element = document.elementFromPoint(touch.clientX, touch.clientY);
+    } else if (event.type === 'mousedown' || event.type === 'mousemove') {
+        element = event.target;
+    }
+    
+    if (element && element.tagName === 'MY-FRA') {
+        if (element !== lastTouchElement) {
+            if (element.style.backgroundColor === 'rgba(255, 0, 0, 0.2)') {
+                element.style.backgroundColor = ''; // 取消選取
+            } else if (element.style.backgroundColor === 'rgba(255, 255, 0, 0.2)') {
+                element.style.backgroundColor = 'rgba(255, 0, 0, 0.2)'; // 重新選取
+                element.dataset.spoken = ''; // 取消已發音標記
+            } else {
+                element.style.backgroundColor = 'rgba(255, 0, 0, 0.2)'; // 改變背景顏色
+            }
+            lastTouchElement = element;
+        }
+    }
+}
+        document.getElementById('sendButton').addEventListener('click', function() {
+    if (isReading) {
+        // 取消朗讀
+        window.speechSynthesis.cancel();
+        this.textContent = "朗讀選取文字";
+        this.classList.remove('button-danger');
+        this.classList.add('button-light');
+        isReading = false;
+    } else {
+        // 開始朗讀
+        sendHighlightedText();
+        this.textContent = "取消朗讀";
+        this.classList.remove('button-light');
+        this.classList.add('button-danger');
+        isReading = true;
+    }
+});
+
+        function sendHighlightedText() {
+            const highlightedText = [];
+            const textLayerDivs = document.getElementById('viewerContainer').getElementsByClassName('textLayer');
+            
+            for (let textLayer of textLayerDivs) {
+                const spans = textLayer.getElementsByTagName('my-fra');
+                for (let span of spans) {
+                    if (span.style.backgroundColor === 'rgba(255, 0, 0, 0.2)') {
+                        highlightedText.push(span.textContent);
+                        span.style.backgroundColor = 'rgba(255, 255, 0, 0.2)'; // 已發音的標示
+                        span.dataset.spoken = 'true'; // 標記為已發音
+                    }
+                }
+            }
+            
+            const cleanedText = highlightedText.join('').trim().replace(/[\r\n]+/g, '').replace(/\s+/g, ' ').trim();
+            sendTextToTTS(cleanedText, () => {
+                // 朗讀完成後的回調
+                document.getElementById('sendButton').textContent = "朗讀選取文字";
+                document.getElementById('sendButton').classList.remove('button-danger');
+                document.getElementById('sendButton').classList.add('button-light');
+                isReading = false;
+            });
+        }
+
+        document.getElementById('clearButton').addEventListener('click', clearHighlights);
+        document.getElementById('touchSelectCheckbox').addEventListener('change', function() {
+            const isChecked = this.checked;
+            clearHighlights();            
+            document.getElementById('sendButton').style.display = isChecked ? 'block' : 'none';
+            document.getElementById('clearButton').style.display = isChecked ? 'block' : 'none';                        
+            document.getElementById('select-all-text').style.display = isChecked ? 'none' : 'block';            
+            document.getElementById('movable-frame').style.display = isChecked ? 'none' : 'block';
+            document.getElementById('resize-bottom').style.display = isChecked ? 'none' : 'block';
+            document.getElementById('resize-right').style.display = isChecked ? 'none' : 'block';
+            document.getElementById('read-button').style.display = isChecked ? 'none' : 'block';
+            
+            if (!isChecked) {
+            updateButtonPositions();            
+            }
+        });
+        wrapTextInFraTags();
+        
+        
+// 使用 MutationObserver 監聽 DOM 變化
+const observer = new MutationObserver((mutationsList, observer) => {
+    for (let mutation of mutationsList) {
+        if (mutation.type === 'childList') {
+            wrapTextInFraTags();
+        }
+    }
+});
+
+// 配置 MutationObserver 監聽的目標節點和選項
+const config = { childList: true, subtree: true };
+
+// 監聽整個 document 的變化
+observer.observe(document, config);
+
+// 確保在 DOM 完全加載後執行
+document.addEventListener('DOMContentLoaded', wrapTextInFraTags);
+document.getElementById('resize-bottom').addEventListener('mousedown', (e) => resizeFrame(e, 'bottom'));
+document.getElementById('resize-right').addEventListener('mousedown', (e) => resizeFrame(e, 'right'));
+
+document.getElementById('resize-bottom').addEventListener('touchstart', (e) => resizeFrameTouch(e, 'bottom'));
+document.getElementById('resize-right').addEventListener('touchstart', (e) => resizeFrameTouch(e, 'right'));
+
+function resizeFrame(e, direction) {
+  e.stopPropagation();
+  let startWidth = frame.offsetWidth;
+  let startHeight = frame.offsetHeight;
+  let startX = e.clientX;
+  let startY = e.clientY;
+  let startTop = frame.offsetTop;
+  let startLeft = frame.offsetLeft;
+
+  function doDrag(e) {
+    if (direction === 'bottom') {
+      let newHeight = startHeight + (e.clientY - startY);
+      frame.style.height = `${newHeight}px`;
+    } else if (direction === 'right') {
+      let newWidth = startWidth + (e.clientX - startX);
+      frame.style.width = `${newWidth}px`;
+    }
+    updateButtonPositions();
+  }
+
+  function stopDrag() {
+    document.removeEventListener('mousemove', doDrag);
+    document.removeEventListener('mouseup', stopDrag);
+  }
+
+  document.addEventListener('mousemove', doDrag);
+  document.addEventListener('mouseup', stopDrag);
+}
+
+function resizeFrameTouch(e, direction) {
+  e.stopPropagation();
+  e.preventDefault(); // Prevent scrolling
+  let startWidth = frame.offsetWidth;
+  let startHeight = frame.offsetHeight;
+  const touch = e.touches[0];
+  let startX = touch.clientX;
+  let startY = touch.clientY;
+  let startTop = frame.offsetTop;
+  let startLeft = frame.offsetLeft;
+
+  function doDrag(e) {
+    const touch = e.touches[0];
+    if (direction === 'bottom') {
+      let newHeight = startHeight + (touch.clientY - startY);
+      frame.style.height = `${newHeight}px`;
+    } else if (direction === 'right') {
+      let newWidth = startWidth + (touch.clientX - startX);
+      frame.style.width = `${newWidth}px`;
+    }
+    updateButtonPositions();
+  }
+
+  function stopDrag() {
+    document.removeEventListener('touchmove', doDrag);
+    document.removeEventListener('touchend', stopDrag);
+  }
+
+  document.addEventListener('touchmove', doDrag);
+  document.addEventListener('touchend', stopDrag);
+}
+
+updateButtonPositions();
+});
+// 獲取框元素
+const frame = document.getElementById('movable-frame');
+
+function showPage(page_no) {
+    __PAGE_RENDERING_IN_PROGRESS = 1;
+    __CURRENT_PAGE = page_no;
+    $("#pdf-next, #pdf-prev").attr('disabled', 'disabled');
+    $("#pdf-canvas").hide();
+    $("#page-loader").show();
+    $("#pdf-current-page").text(page_no);
+    __PDF_DOC.getPage(page_no).then(function (page) {
+        let viewport = page.getViewport({ scale: 1 });
+        let scale = __CANVAS.width / viewport.width;
+        viewport = page.getViewport({ scale: scale });
+        __CANVAS.height = viewport.height;
+        var renderContext = {
+            canvasContext: __CANVAS_CTX,
+            viewport: viewport
+        };
+        page.render(renderContext).promise.then(function () {
+            __PAGE_RENDERING_IN_PROGRESS = 0;
+            $("#pdf-next, #pdf-prev").removeAttr('disabled');
+            $("#pdf-canvas").show();
+            $("#page-loader").hide();
+            return page.getTextContent();
+        }).then(function (textContent) {
+            var canvas_offset = $("#pdf-canvas").offset();
+            $("#text-layer").html('');
+            document.getElementById('text-layer').style.setProperty('--scale-factor', viewport.scale);
+            $("#text-layer").css({ left: canvas_offset.left + 'px', top: canvas_offset.top + 'px' });
+            PDFJS.renderTextLayer({
+                textContentSource: textContent,
+                container: $("#text-layer").get(0),
+                viewport: viewport,
+                textDivs: []
+            });
+            console.log('Text Layer Content:', textContent);
+        });
+    });
+}
+
+
+ let selectedVoice = '1'; // 預設語音
+
+        function selectVoice(checkbox) {
+            const chineseCheckbox = document.getElementById('chinese');
+            const englishCheckbox = document.getElementById('english');
+
+            if (checkbox.id === 'chinese') {
+                englishCheckbox.checked = !checkbox.checked;
+            } else {
+                chineseCheckbox.checked = !checkbox.checked;
+            }
+
+            selectedVoice = checkbox.checked ? checkbox.value : (checkbox.id === 'chinese' ? englishCheckbox.value : chineseCheckbox.value);
+        }
+
+
+   // 更新語速顯示
+
+
+function updateRate(value) {
+    let adjustedValue = value;
+   let displayValue = adjustedValue === 0 ? '0%' : 
+    `<span style="writing-mode: vertical-lr; display: inline-block;">語速${adjustedValue > 0 ? '加' : '減'}
+  <span style="text-combine-upright: all;">${Math.abs(adjustedValue)}</span>
+  <span style="display: inline-block; transform: rotate(90deg); transform-origin: center;">%</span>
+</span>
+`;
+    selectedRate = adjustedValue + '%';
+    document.getElementById('speedValue').innerHTML = displayValue;
+
+    // 設置語音合成速率
+    let rate = 1 + (adjustedValue / 100*2); // 將速率範圍設置為 0.5 到 3
+    speechSynthesis.getVoices().forEach(voice => {
+        let utterance = new SpeechSynthesisUtterance();
+        utterance.voice = voice;
+        utterance.rate = rate;
+    });
+}
+
+// 設置初始語速
+document.getElementById('speakSpeed').value = -30;
+updateRate(-30);
+
+// API KEY 管理功能
+let qrStream = null;
+let qrScanInterval = null;
+
+// 打開 API KEY 設定模態視窗
+document.getElementById('apiKeySettingsButton').addEventListener('click', async () => {
+    const modal = document.getElementById('apiKeyModal');
+    const overlay = document.getElementById('apiKeyModalOverlay');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    
+    // 載入現有的 API KEY（不顯示完整，只顯示前後幾位）
+    const existingKey = await loadApiKeyFromIndexedDB();
+    if (existingKey) {
+        const maskedKey = existingKey.length > 8 
+            ? existingKey.substring(0, 4) + '...' + existingKey.substring(existingKey.length - 4)
+            : '***';
+        apiKeyInput.placeholder = `已設定：${maskedKey}`;
+    } else {
+        apiKeyInput.placeholder = '請輸入或掃描 QR Code';
+    }
+    apiKeyInput.value = '';
+    
+    modal.style.display = 'block';
+    overlay.style.display = 'block';
+});
+
+// 關閉模態視窗
+function closeApiKeyModal() {
+    const modal = document.getElementById('apiKeyModal');
+    const overlay = document.getElementById('apiKeyModalOverlay');
+    const qrContainer = document.getElementById('qrScannerContainer');
+    
+    modal.style.display = 'none';
+    overlay.style.display = 'none';
+    qrContainer.style.display = 'none';
+    
+    // 停止 QR code 掃描
+    stopQRScan();
+}
+
+document.getElementById('cancelApiKeyButton').addEventListener('click', closeApiKeyModal);
+document.getElementById('apiKeyModalOverlay').addEventListener('click', closeApiKeyModal);
+
+// 儲存 API KEY
+document.getElementById('saveApiKeyButton').addEventListener('click', async () => {
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const apiKey = apiKeyInput.value.trim();
+    
+    if (!apiKey) {
+        Swal.fire({
+            icon: 'warning',
+            title: '輸入為空',
+            text: '請輸入 API KEY 或掃描 QR Code'
+        });
+        return;
+    }
+    
+    try {
+        await saveApiKeyToIndexedDB(apiKey);
+        Swal.fire({
+            icon: 'success',
+            title: '儲存成功',
+            text: 'API KEY 已儲存',
+            timer: 1500,
+            showConfirmButton: false
+        });
+        closeApiKeyModal();
+    } catch (error) {
+        console.error('儲存 API KEY 失敗：', error);
+        Swal.fire({
+            icon: 'error',
+            title: '儲存失敗',
+            text: '無法儲存 API KEY，請重試'
+        });
+    }
+});
+
+// 停止 QR code 掃描
+function stopQRScan() {
+    if (qrStream) {
+        qrStream.getTracks().forEach(track => track.stop());
+        qrStream = null;
+    }
+    if (qrScanInterval) {
+        clearInterval(qrScanInterval);
+        qrScanInterval = null;
+    }
+    const qrVideo = document.getElementById('qrVideo');
+    const qrContainer = document.getElementById('qrScannerContainer');
+    qrVideo.srcObject = null;
+    qrContainer.style.display = 'none';
+}
+
+// 開始 QR code 掃描
+document.getElementById('scanQRButton').addEventListener('click', async () => {
+    const qrContainer = document.getElementById('qrScannerContainer');
+    const qrVideo = document.getElementById('qrVideo');
+    const qrCanvas = document.getElementById('qrCanvas');
+    
+    try {
+        // 請求相機權限
+        qrStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                facingMode: 'environment' // 優先使用後置相機
+            } 
+        });
+        
+        qrVideo.srcObject = qrStream;
+        qrVideo.setAttribute('playsinline', true);
+        qrContainer.style.display = 'block';
+        
+        await qrVideo.play();
+        
+        const videoWidth = qrVideo.videoWidth;
+        const videoHeight = qrVideo.videoHeight;
+        qrCanvas.width = videoWidth;
+        qrCanvas.height = videoHeight;
+        
+        const ctx = qrCanvas.getContext('2d');
+        
+        // 開始掃描
+        qrScanInterval = setInterval(() => {
+            if (qrVideo.readyState === qrVideo.HAVE_ENOUGH_DATA) {
+                ctx.drawImage(qrVideo, 0, 0, videoWidth, videoHeight);
+                const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
+                const code = jsQR(imageData.data, imageData.width, imageData.height);
+                
+                if (code) {
+                    // 找到 QR code，填入 API KEY
+                    document.getElementById('apiKeyInput').value = code.data;
+                    stopQRScan();
+                    Swal.fire({
+                        icon: 'success',
+                        title: '掃描成功',
+                        text: 'QR Code 已讀取',
+                        timer: 1500,
+                        showConfirmButton: false
+                    });
+                }
+            }
+        }, 100);
+        
+    } catch (error) {
+        console.error('無法訪問相機：', error);
+        Swal.fire({
+            icon: 'error',
+            title: '無法訪問相機',
+            text: '請允許瀏覽器訪問相機權限，或手動輸入 API KEY'
+        });
+    }
+});
+
+// 停止掃描按鈕
+document.getElementById('stopScanButton').addEventListener('click', stopQRScan);
+        
+</script>
+<!-- 在head部分添加Tesseract.js -->
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@latest/dist/tesseract.min.js"></script>
+
+
+</body>
+</html>
