@@ -246,10 +246,10 @@ input[type=range]::-moz-range-thumb {
     
     /* SweetAlert2 高 z-index 樣式 */
     .swal-high-z-index {
-        z-index: 9999 !important;
+        z-index: 10030 !important;
     }
 
-    /* SweetAlert2 全域高 z-index，確保永遠在最上層 */
+    /* SweetAlert2 全域高 z-index，確保永遠在最上層（高於 API KEY 模態視窗的 10020） */
     .swal2-container,
     .swal2-popup,
     .swal2-modal,
@@ -270,7 +270,7 @@ input[type=range]::-moz-range-thumb {
     .swal2-backdrop-hide,
     .swal2-noanimation,
     .swal2-toast {
-      z-index: 10010 !important;
+      z-index: 10030 !important;
     }
     </style>
 	  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
@@ -350,8 +350,9 @@ input[type=range]::-moz-range-thumb {
                     <button id="stopScanButton" class="button button-danger" style="width: 100%; margin-top: 10px;">停止掃描</button>
                 </div>
             </div>
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <button id="saveApiKeyButton" class="button button-success" style="flex: 1;">儲存</button>
+                <button id="deleteApiKeyButton" class="button button-danger" style="flex: 1;">刪除 API KEY</button>
                 <button id="cancelApiKeyButton" class="button button-secondary" style="flex: 1;">取消</button>
             </div>
         </div>
@@ -526,24 +527,8 @@ window.addEventListener('orientationchange', () => {
 // Initial render
 renderPage(currentPage);
 	
-// Google Apps Script 代理 URL（備用選項）
+// Google Apps Script 代理 URL
 const gasUrl = 'https://script.google.com/macros/s/AKfycbzOak3lHdg8lGSQSiLLk0kVK9IIC277xyVgU9hjykW0tRRcCE6si_-hMLfeLcwnvvNcHg/exec';
-
-// CORS 代理服務（台灣區友好）
-// 注意：免費代理服務可能不穩定，建議使用 Cloudflare Workers 自建代理
-// 自建代理教程：https://developers.cloudflare.com/workers/
-// 
-// 如果您已自建 Cloudflare Workers 代理，請將下面的 'YOUR_WORKER_URL' 替換為您的 Worker URL
-// 格式：'https://your-worker.your-subdomain.workers.dev/?url='
-const CORS_PROXIES = [
-    // 優先使用自建的 Cloudflare Workers 代理（最穩定可靠）
-    // 'https://YOUR_WORKER_URL?url=',  // 取消註解並填入您的 Worker URL
-    
-    // 以下為公開的免費代理服務（可能有速率限制或不穩定）
-    'https://api.allorigins.win/raw?url=',           // 免費，有速率限制
-    'https://api.codetabs.com/v1/proxy?quest='      // 免費，僅支援 GET 請求
-  
-];
 
 
 // 打開 IndexedDB 資料庫
@@ -679,6 +664,27 @@ const loadApiKeyFromIndexedDB = async () => {
     }
 };
 
+// 刪除 API KEY 從 IndexedDB
+const deleteApiKeyFromIndexedDB = async () => {
+    try {
+        const db = await openDB();
+        const transaction = db.transaction('settings', 'readwrite');
+        const store = transaction.objectStore('settings');
+        const deleteRequest = store.delete('geminiApiKey');
+        
+        return new Promise((resolve, reject) => {
+            deleteRequest.onsuccess = () => {
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            };
+            deleteRequest.onerror = () => reject(deleteRequest.error);
+        });
+    } catch (error) {
+        console.error('刪除 API KEY 從 IndexedDB 失敗：', error);
+        throw error;
+    }
+};
+
 // 更新網址中的檔案名稱
 
 function updateUrl(fileName) {
@@ -691,7 +697,7 @@ function updateUrl(fileName) {
     window.history.replaceState({}, '', newUrl);
 }
 
-// 從 Google 雲端硬碟載入 PDF 檔案（不使用 GAS 代理）
+// 從 Google 雲端硬碟載入 PDF 檔案（使用 GAS 代理）
 async function loadPdfFromDrive(fileId, showLoading = true) {
     // 檢查是否是本地檔案名稱（包含 .pdf 結尾）
     if (fileId && fileId.toLowerCase().endsWith('.pdf')) {
@@ -710,14 +716,10 @@ async function loadPdfFromDrive(fileId, showLoading = true) {
         });
     }
 
-    // Google Drive 下載連結（使用 confirm 參數避免確認頁面）
-    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
-    
-    let arrayBuffer = null;
     let fileName = `file_${fileId}.pdf`;
     
     // 創建帶超時的 fetch 函數
-    const fetchWithTimeout = (url, options = {}, timeout = 5000) => {
+    const fetchWithTimeout = (url, options = {}, timeout = 10000) => {
         return Promise.race([
             fetch(url, options),
             new Promise((_, reject) => 
@@ -726,129 +728,36 @@ async function loadPdfFromDrive(fileId, showLoading = true) {
         ]);
     };
     
-    // 構建所有可用的下載方式（並行嘗試）
-    const downloadPromises = [];
-    
-    // 1. 直接下載（快速失敗，不等待超時）
-    downloadPromises.push(
-        fetchWithTimeout(directUrl, { method: 'GET', redirect: 'follow' }, 3000)
-            .then(async (response) => {
-                if (response.ok) {
-                    const contentType = response.headers.get('content-type') || '';
-                    if (contentType.includes('application/pdf') || 
-                        contentType.includes('application/octet-stream')) {
-                        const contentDisposition = response.headers.get('content-disposition') || '';
-                        const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-                        if (fileNameMatch && fileNameMatch[1]) {
-                            fileName = fileNameMatch[1].replace(/['"]/g, '');
-                        }
-                        return { source: 'direct', data: await response.arrayBuffer() };
-                    }
-                }
-                throw new Error('直接下載失敗');
-            })
-            .catch(() => null) // 靜默失敗，不影響其他嘗試
-    );
-    
-    // 2. 使用 GAS 代理（備用選項）
-    downloadPromises.push(
-        (async () => {
-            try {
-                const gasResponse = await fetchWithTimeout(
-                    `${gasUrl}?fileId=${fileId}`, 
-                    { method: 'GET' }, 
-                    10000
-                );
-                
-                if (gasResponse.ok) {
-                    const data = await gasResponse.json();
-                    if (data.fileContent && data.fileName) {
-                        // GAS 返回 base64 編碼的內容
-                        const fileContent = atob(data.fileContent);
-                        const arrayBuffer = new ArrayBuffer(fileContent.length);
-                        const uint8Array = new Uint8Array(arrayBuffer);
-                        for (let i = 0; i < fileContent.length; i++) {
-                            uint8Array[i] = fileContent.charCodeAt(i);
-                        }
-                        fileName = data.fileName;
-                        return { source: 'gas', data: arrayBuffer };
-                    }
-                }
-                throw new Error('GAS 代理回應錯誤');
-            } catch (error) {
-                return null; // 靜默失敗
-            }
-        })()
-    );
-    
-    // 3. 使用 CORS 代理（並行嘗試所有代理）
-    for (let i = 0; i < CORS_PROXIES.length; i++) {
-        // 跳過註解掉的代理
-        if (CORS_PROXIES[i].includes('YOUR_WORKER_URL') || CORS_PROXIES[i].trim() === '') {
-            continue;
+    try {
+        // 使用 GAS 代理下載
+        console.log('使用 GAS 代理下載檔案...');
+        const gasResponse = await fetchWithTimeout(
+            `${gasUrl}?fileId=${fileId}`, 
+            { method: 'GET' }, 
+            10000
+        );
+        
+        if (!gasResponse.ok) {
+            throw new Error(`GAS 代理回應錯誤: ${gasResponse.status} ${gasResponse.statusText}`);
         }
         
-        downloadPromises.push(
-            (async () => {
-                try {
-                    // 根據不同的代理服務構建正確的 URL
-                    let proxyUrl;
-                    const encodedUrl = encodeURIComponent(directUrl);
-                    
-                    if (CORS_PROXIES[i].includes('workers.dev')) {
-                        // Cloudflare Workers 格式: https://your-worker.workers.dev/?url=URL
-                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
-                    } else if (CORS_PROXIES[i].includes('allorigins.win')) {
-                        // allorigins.win 格式: https://api.allorigins.win/raw?url=URL
-                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
-                    } else if (CORS_PROXIES[i].includes('codetabs.com')) {
-                        // codetabs 格式: https://api.codetabs.com/v1/proxy?quest=URL
-                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
-                    } else {
-                        // 預設使用編碼的 URL
-                        proxyUrl = CORS_PROXIES[i] + encodedUrl;
-                    }
-                    
-                    const proxyResponse = await fetchWithTimeout(proxyUrl, {
-                        method: 'GET',
-                        headers: { 'Accept': 'application/pdf' }
-                    }, 10000); // 代理請求超時設為 10 秒
-                    
-                    if (proxyResponse.ok) {
-                        return { 
-                            source: `proxy_${i + 1}`, 
-                            data: await proxyResponse.arrayBuffer() 
-                        };
-                    }
-                    throw new Error(`代理 ${i + 1} 回應錯誤: ${proxyResponse.status}`);
-                } catch (error) {
-                    return null; // 靜默失敗
-                }
-            })()
-        );
-    }
-    
-    // 使用 Promise.allSettled 並行嘗試所有下載方式，獲取最快成功的結果
-    console.log(`並行嘗試 ${downloadPromises.length} 種下載方式...`);
-    const results = await Promise.allSettled(downloadPromises);
-    
-    // 找到第一個成功的結果
-    let downloadSuccess = false;
-    for (const result of results) {
-        if (result.status === 'fulfilled' && result.value !== null && result.value.data) {
-            arrayBuffer = result.value.data;
-            console.log(`✓ 下載成功，來源: ${result.value.source}`);
-            downloadSuccess = true;
-            break;
+        const data = await gasResponse.json();
+        
+        if (!data.fileContent || !data.fileName) {
+            throw new Error('GAS 代理返回的資料格式錯誤');
         }
-    }
-    
-    if (!downloadSuccess || !arrayBuffer) {
-        console.error('所有下載方式都失敗');
-        throw new Error('無法從 Google 雲端硬碟下載檔案，請確認檔案已公開分享或檢查網路連線');
-    }
-    
-    try {
+        
+        // GAS 返回 base64 編碼的內容
+        const fileContent = atob(data.fileContent);
+        const arrayBuffer = new ArrayBuffer(fileContent.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < fileContent.length; i++) {
+            uint8Array[i] = fileContent.charCodeAt(i);
+        }
+        fileName = data.fileName;
+        
+        console.log(`✓ 下載成功，來源: GAS 代理`);
+        
         // 將 ArrayBuffer 轉換為 File 並保存
         const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
         const file = new File([blob], fileName, { type: 'application/pdf' });
@@ -872,12 +781,20 @@ async function loadPdfFromDrive(fileId, showLoading = true) {
             });
         });
     } catch (error) {
-        console.error('處理 PDF 檔案失敗：', error);
+        console.error('GAS 代理下載失敗：', error);
         if (showLoading) {
             Swal.fire({
                 icon: 'error',
-                title: '載入失敗',
-                text: '無法載入 PDF 檔案，請檢查檔案 ID 是否正確或檔案是否已公開分享。',
+                title: '下載失敗',
+                text: '無法從 Google 雲端硬碟下載檔案。\n\n' +
+                    '可能的原因：\n' +
+                    '1. 檔案未公開分享（請確認檔案分享設定為「知道連結的使用者」）\n' +
+                    '2. GAS 代理服務異常\n' +
+                    '3. 網路連線問題\n\n' +
+                    '建議：\n' +
+                    '- 確認檔案已公開分享\n' +
+                    '- 檢查網路連線\n' +
+                    '- 稍後再試',
             });
         }
     }
@@ -1233,42 +1150,30 @@ function replaceTextWithSheetData(text, data) {
                 if (callback) callback();
             };
             
-            // 添加載入事件
-            audioPlayer.onloadstart = () => console.log('開始載入音頻...');
-            audioPlayer.oncanplay = () => {
-                console.log('音頻可以播放');
-                // 音頻準備好後自動播放
-                const playPromise = audioPlayer.play();
-                if (playPromise !== undefined) {
-                    playPromise
-                        .then(() => {
-                            console.log('音頻播放成功');
-                            // 播放成功後設置完成回調
-                            audioPlayer.onended = callback;
-                        })
-                        .catch(error => {
-                            console.error('音頻播放失敗:', error);
-                            // 播放失敗時也要調用回調
-                            if (callback) callback();
-                        });
-                } else {
-                    // 如果沒有播放Promise，直接設置回調
-                    audioPlayer.onended = callback;
-                }
-            };
+            // 清除之前的事件監聽器，防止重複播放
+            audioPlayer.oncanplay = null;
+            audioPlayer.onended = null;
+            audioPlayer.onerror = null;
             
             // 設置載入超時
             let loadTimeout = setTimeout(() => {
                 console.error('音頻載入超時');
-                if (callback) callback();
-            }, 10000); // 10秒超時
-            
-            // 載入成功後清除超時
-            audioPlayer.oncanplay = () => {
                 if (loadTimeout) {
                     clearTimeout(loadTimeout);
                     loadTimeout = null;
                 }
+                if (callback) callback();
+            }, 10000); // 10秒超時
+            
+            // 添加載入事件（只設置一次）
+            audioPlayer.onloadstart = () => console.log('開始載入音頻...');
+            audioPlayer.oncanplay = () => {
+                // 清除超時
+                if (loadTimeout) {
+                    clearTimeout(loadTimeout);
+                    loadTimeout = null;
+                }
+                
                 console.log('音頻可以播放');
                 // 音頻準備好後自動播放
                 const playPromise = audioPlayer.play();
@@ -1771,9 +1676,14 @@ async function readTextInsideFrame() {
         
         // 在 iOS 上，需要在用戶交互的同步上下文中立即獲取音頻播放權限
         // 通過播放"圖片辨識中，請稍候。"來獲取權限，同時給用戶提示
-        sendTextToTTS('圖片辨識中，請稍候。', () => {
-            console.log('播放權限已獲取，開始圖片辨識');
-        });
+        // 防止重複播放
+        if (!isPlayingWaitingMessage) {
+            isPlayingWaitingMessage = true;
+            sendTextToTTS('圖片辨識中，請稍候。', () => {
+                console.log('播放權限已獲取，開始圖片辨識');
+                isPlayingWaitingMessage = false; // 播放完成後重置標記
+            });
+        }
         
         try {
             Swal.fire({
@@ -1805,6 +1715,7 @@ async function readTextInsideFrame() {
                     console.log('圖片辨識文字朗讀完成');
                     // 辨識完成，重置標記
                     isImageRecognizing = false;
+                    isPlayingWaitingMessage = false;
                 });
             } else {
                 console.error('Gemini 回傳的內容為空');
@@ -1815,6 +1726,7 @@ async function readTextInsideFrame() {
                 });
                 // 辨識失敗，重置標記
                 isImageRecognizing = false;
+                isPlayingWaitingMessage = false;
             }
         } catch (error) {
             console.error('Gemini 辨識失敗:', error);
@@ -1825,6 +1737,7 @@ async function readTextInsideFrame() {
             });
             // 辨識失敗，重置標記
             isImageRecognizing = false;
+            isPlayingWaitingMessage = false;
         }
         return;
     }
@@ -1867,6 +1780,7 @@ function cropCanvas(sourceCanvas, cropRect) {
 }
   let lastTouchElement = null;
   let isImageRecognizing = false; // 防止圖片辨識重複執行
+  let isPlayingWaitingMessage = false; // 防止"圖片辨識中，請稍候"語音重複播放
 
  function wrapTextInFraTags() {
     const markedContentSpans = document.querySelectorAll('span[role="presentation"]');
@@ -2233,6 +2147,58 @@ document.getElementById('saveApiKeyButton').addEventListener('click', async () =
             title: '儲存失敗',
             text: '無法儲存 API KEY，請重試'
         });
+    }
+});
+
+// 刪除 API KEY
+document.getElementById('deleteApiKeyButton').addEventListener('click', async () => {
+    // 確認刪除
+    const result = await Swal.fire({
+        icon: 'warning',
+        title: '確認刪除',
+        text: '確定要刪除現有的 API KEY 嗎？',
+        showCancelButton: true,
+        confirmButtonText: '確定刪除',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#dc3545',
+        cancelButtonColor: '#6c757d',
+        customClass: {
+            popup: 'swal-high-z-index',
+            container: 'swal-high-z-index'
+        }
+    });
+    
+    if (result.isConfirmed) {
+        try {
+            await deleteApiKeyFromIndexedDB();
+            // 清空輸入框和提示
+            document.getElementById('apiKeyInput').value = '';
+            document.getElementById('apiKeyInput').placeholder = '請輸入或掃描 QR Code';
+            
+            Swal.fire({
+                icon: 'success',
+                title: '刪除成功',
+                text: 'API KEY 已刪除',
+                timer: 1500,
+                showConfirmButton: false,
+                customClass: {
+                    popup: 'swal-high-z-index',
+                    container: 'swal-high-z-index'
+                }
+            });
+            closeApiKeyModal();
+        } catch (error) {
+            console.error('刪除 API KEY 失敗：', error);
+            Swal.fire({
+                icon: 'error',
+                title: '刪除失敗',
+                text: '無法刪除 API KEY，請重試',
+                customClass: {
+                    popup: 'swal-high-z-index',
+                    container: 'swal-high-z-index'
+                }
+            });
+        }
     }
 });
 
