@@ -1065,7 +1065,7 @@ if (clearCacheButton) {
 
 function replaceTextWithSheetData(text, data) {
     if (!data) return text;
-    data.table.rows.forEach(row => {
+    data.table.rows.slice(1).forEach(row => {
         // 確保資料存在且轉換為字串
         const original = row.c[0]?.v?.toString() || ''; // B欄
         const replacement = row.c[1]?.v?.toString() || ''; // C欄
