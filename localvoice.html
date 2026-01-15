@@ -1084,7 +1084,7 @@ function fetchSheetData(sheetId, callback) {
         }
 
         function replaceTextUsingSheetData(text, sheetData) {
-            sheetData.forEach(row => {
+            sheetData.slice(1).forEach(row => {
                 const originalWord = row.c[1].v;
                 const replacementWord = row.c[2].v;
                 const regex = new RegExp(originalWord, 'g');
