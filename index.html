@@ -577,8 +577,8 @@ input[type=range]::-moz-range-thumb {
       <option value="en-US-GuyNeural">雲端：英文 Guy (男性)</option>
       <option value="en-US-AriaNeural">雲端：英文 Aria (女性)</option>
       <option value="en-US-ChristopherNeural">雲端：英文 Christ (男性)</option> 
-      <option value="local-zh-female">本機：中文女音 (瀏覽器)</option>
-      <option value="local-en-female">本機：英文女音 (瀏覽器)</option>
+      <option value="local-zh-female">本機：中文 (瀏覽器)</option>
+      <option value="local-en-female">本機：英文 (瀏覽器)</option>
     </select>
 </div>
 		  <!-- 語速調整 -->
@@ -1526,6 +1526,15 @@ if (clearCacheButton) {
           return;
       }
       browserVoices = window.speechSynthesis.getVoices();
+      console.log('已載入語音列表，共', browserVoices.length, '個語音');
+      // 列出所有中文語音（用於除錯）
+      const chineseVoices = browserVoices.filter(v => {
+          const lang = (v.lang || '').toLowerCase();
+          return lang.startsWith('zh') || lang.startsWith('cmn');
+      });
+      if (chineseVoices.length > 0) {
+          console.log('可用的中文語音:', chineseVoices.map(v => `${v.name} (${v.lang})`));
+      }
   }
 
   // 依語系尋找本機女聲，找不到就退回同語系 / 任意 voice
@@ -1533,25 +1542,65 @@ if (clearCacheButton) {
       if (!('speechSynthesis' in window)) {
           return null;
       }
+      // 強制重新獲取語音列表（iPad 可能需要）
+      browserVoices = window.speechSynthesis.getVoices();
       if (!browserVoices || browserVoices.length === 0) {
-          browserVoices = window.speechSynthesis.getVoices();
-      }
-      if (!browserVoices || browserVoices.length === 0) {
+          // 如果還是空的，等待一下再試
+          setTimeout(() => {
+              browserVoices = window.speechSynthesis.getVoices();
+          }, 100);
           return null;
       }
+      
       const lowerLang = (langPrefix || '').toLowerCase();
-      // 優先：指定語系 + 名稱像女聲
-      const femaleLike = browserVoices.find(v =>
-          v.lang && v.lang.toLowerCase().startsWith(lowerLang) &&
-          v.name && /female|女|woman|girl|Jenny|Zira|Aria/i.test(v.name)
-      );
-      if (femaleLike) return femaleLike;
-      // 次優先：指定語系任一 voice
-      const sameLang = browserVoices.find(v =>
-          v.lang && v.lang.toLowerCase().startsWith(lowerLang)
-      );
-      if (sameLang) return sameLang;
+      
+      // 針對中文，嘗試多種語言代碼變體
+      const chineseLangCodes = ['zh-tw', 'zh-cn', 'zh-hk', 'zh', 'cmn'];
+      const isChinese = lowerLang === 'zh' || lowerLang.startsWith('zh');
+      
+      if (isChinese) {
+          // 優先：繁體中文（zh-TW）女聲
+          for (const langCode of chineseLangCodes) {
+              const zhFemale = browserVoices.find(v => {
+                  const vLang = (v.lang || '').toLowerCase();
+                  const isLangMatch = vLang === langCode || vLang.startsWith(langCode);
+                  const isFemale = v.name && /female|女|woman|girl|Mei-Jia|Yuna|Ting-Ting|Sin-Ji/i.test(v.name);
+                  return isLangMatch && isFemale;
+              });
+              if (zhFemale) {
+                  console.log('找到中文女聲:', zhFemale.name, zhFemale.lang);
+                  return zhFemale;
+              }
+          }
+          
+          // 次優先：任何中文語音（優先 zh-TW）
+          for (const langCode of chineseLangCodes) {
+              const zhVoice = browserVoices.find(v => {
+                  const vLang = (v.lang || '').toLowerCase();
+                  return vLang === langCode || vLang.startsWith(langCode);
+              });
+              if (zhVoice) {
+                  console.log('找到中文語音:', zhVoice.name, zhVoice.lang);
+                  return zhVoice;
+              }
+          }
+      } else {
+          // 英文或其他語言的原有邏輯
+          // 優先：指定語系 + 名稱像女聲
+          const femaleLike = browserVoices.find(v =>
+              v.lang && v.lang.toLowerCase().startsWith(lowerLang) &&
+              v.name && /female|女|woman|girl|Jenny|Zira|Aria/i.test(v.name)
+          );
+          if (femaleLike) return femaleLike;
+          // 次優先：指定語系任一 voice
+          const sameLang = browserVoices.find(v =>
+              v.lang && v.lang.toLowerCase().startsWith(lowerLang)
+          );
+          if (sameLang) return sameLang;
+      }
+      
       // 最後備援：列表第一個
+      console.warn('使用備援語音:', browserVoices[0]?.name, browserVoices[0]?.lang);
       return browserVoices[0];
   }
 
@@ -1569,35 +1618,85 @@ if (clearCacheButton) {
           console.warn('取消本機語音時發生例外：', e);
       }
 
-      const voice = findLocalVoice(langPrefix);
-      if (!voice) {
-          console.warn('找不到對應的本機語音，無法朗讀');
-          if (callback) callback();
-          return;
-      }
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.voice = voice;
-
-      // 將 -50% ~ +50% 映射成約 0.5 ~ 1.5 區間
-      const rate = Math.min(3, Math.max(0.1, 1 + (ratePercent / 100)));
-      utterance.rate = rate;
-
-      utterance.onend = () => {
-          if (callback) callback();
+      // 針對 iPad，可能需要等待語音列表載入
+      const trySpeak = () => {
+          const voice = findLocalVoice(langPrefix);
+          if (!voice) {
+              console.warn('找不到對應的本機語音，無法朗讀');
+              // 如果是中文且找不到語音，再試一次（iPad 可能需要時間載入）
+              if (langPrefix === 'zh') {
+                  setTimeout(() => {
+                      const retryVoice = findLocalVoice(langPrefix);
+                      if (retryVoice) {
+                          doSpeak(retryVoice);
+                      } else {
+                          console.error('重試後仍找不到中文語音');
+                          if (callback) callback();
+                      }
+                  }, 200);
+                  return;
+              }
+              if (callback) callback();
+              return;
+          }
+          doSpeak(voice);
       };
-      utterance.onerror = (e) => {
-          console.error('本機語音朗讀錯誤：', e);
-          if (callback) callback();
+
+      const doSpeak = (voice) => {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.voice = voice;
+          
+          // 明確設定語言（iPad 需要）
+          if (langPrefix === 'zh') {
+              // 優先使用語音的原始語言代碼，否則使用常見的中文代碼
+              utterance.lang = voice.lang || 'zh-TW';
+          } else if (langPrefix === 'en') {
+              utterance.lang = voice.lang || 'en-US';
+          } else {
+              utterance.lang = voice.lang || langPrefix;
+          }
+
+          // 將 -50% ~ +50% 映射成約 0.5 ~ 1.5 區間
+          const rate = Math.min(3, Math.max(0.1, 1 + (ratePercent / 100)));
+          utterance.rate = rate;
+          
+          // iPad 可能需要設定 pitch 和 volume
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+
+          utterance.onend = () => {
+              console.log('本機語音朗讀完成');
+              if (callback) callback();
+          };
+          utterance.onerror = (e) => {
+              console.error('本機語音朗讀錯誤：', e);
+              console.error('錯誤詳情 - 語音:', voice.name, '語言:', voice.lang, '文字長度:', text.length);
+              if (callback) callback();
+          };
+          utterance.onstart = () => {
+              console.log('開始朗讀 - 語音:', voice.name, '語言:', voice.lang);
+          };
+
+          try {
+              window.speechSynthesis.speak(utterance);
+          } catch (e) {
+              console.error('speak() 呼叫失敗：', e);
+              if (callback) callback();
+          }
       };
 
-      window.speechSynthesis.speak(utterance);
+      trySpeak();
   }
 
   if ('speechSynthesis' in window) {
       // 某些瀏覽器需要等 voices 載入完成才拿得到
       window.speechSynthesis.onvoiceschanged = initBrowserVoices;
       initBrowserVoices();
+      
+      // iPad 可能需要多次嘗試載入語音列表
+      setTimeout(initBrowserVoices, 100);
+      setTimeout(initBrowserVoices, 500);
+      setTimeout(initBrowserVoices, 1000);
   }
           document.addEventListener('DOMContentLoaded', async () => {
     audioPlayer = document.getElementById('audioPlayer');
