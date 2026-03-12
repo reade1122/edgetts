@@ -1182,7 +1182,7 @@ async function loadPdfFromDrive(fileId, showLoading = true) {
     let fileName = `file_${fileId}.pdf`;
     
     // 創建帶超時的 fetch 函數
-    const fetchWithTimeout = (url, options = {}, timeout = 10000) => {
+    const fetchWithTimeout = (url, options = {}, timeout = 6000000) => {
         return Promise.race([
             fetch(url, options),
             new Promise((_, reject) => 
@@ -1197,7 +1197,7 @@ async function loadPdfFromDrive(fileId, showLoading = true) {
         const gasResponse = await fetchWithTimeout(
             `${gasUrl}?fileId=${fileId}`, 
             { method: 'GET' }, 
-            10000
+            6000000
         );
         
         if (!gasResponse.ok) {
