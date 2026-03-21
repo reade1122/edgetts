@@ -25,9 +25,9 @@
     const voiceSelect = document.createElement('select');
     voiceSelect.id = 'voiceSelect';
     voiceSelect.style.position = 'fixed';
-    // 與語速控制橫向並列，位於其左側，多預留寬度避免重疊
     voiceSelect.style.top = '70px';
-    voiceSelect.style.right = '450px';
+    voiceSelect.style.right = '12px';
+    voiceSelect.style.left = 'auto';
     voiceSelect.style.zIndex = '3100';
     voiceSelect.style.fontSize = '16px';
     voiceSelect.style.height = '40px';
@@ -55,9 +55,12 @@
     const speedWrap = document.createElement('div');
     speedWrap.id = 'readingSpeedWrap';
     speedWrap.style.position = 'fixed';
-    speedWrap.style.top = '70px';
-    speedWrap.style.right = '150px';
     speedWrap.style.zIndex = '3100';
+    // 實際位置由 layoutTtsPlaybackBar() 置於底部置中（與播放列、audio 同列）
+    speedWrap.style.top = 'auto';
+    speedWrap.style.bottom = '12px';
+    speedWrap.style.left = '50%';
+    speedWrap.style.right = 'auto';
     speedWrap.style.background = 'rgba(255,255,255,0.9)';
     speedWrap.style.padding = '2px 6px';
     speedWrap.style.borderRadius = '6px';
@@ -187,7 +190,8 @@
     frame.classList.add('active');
   }
 
-  function isRectHit(frameRect, rect) {
+  /** 字元框與框選／標記區重疊比例（相對於字元面積），標記區慣用 0.45、框選朗讀用 0.55 */
+  function isRectHitFlexible(frameRect, rect, minRatio = 0.55) {
     const interLeft = Math.max(rect.left, frameRect.left);
     const interRight = Math.min(rect.right, frameRect.right);
     const interTop = Math.max(rect.top, frameRect.top);
@@ -198,17 +202,949 @@
 
     const rectArea = (rect.width || 1) * (rect.height || 1);
     const overlapArea = interWidth * interHeight;
-    const overlapRatio = overlapArea / rectArea;
-    return overlapRatio >= 0.55;
+    return overlapArea / rectArea >= minRatio;
+  }
+
+  function isRectHit(frameRect, rect) {
+    return isRectHitFlexible(frameRect, rect, 0.55);
+  }
+
+  /** 直書字元通常「高明顯大於寬」；橫書則相反或接近方形 */
+  function isVerticalishSize(width, height) {
+    const w = Math.max(0, Number(width) || 0);
+    const h = Math.max(0, Number(height) || 0);
+    return h > w * 1.2;
+  }
+
+  function isCjkLikeChar(ch) {
+    if (ch == null || ch === '') return false;
+    const cp = ch.codePointAt(0);
+    return (
+      (cp >= 0x3000 && cp <= 0x9fff) ||
+      (cp >= 0x3040 && cp <= 0x30ff) ||
+      (cp >= 0x3400 && cp <= 0x4dbf) ||
+      (cp >= 0xff10 && cp <= 0xff19) ||
+      (cp >= 0x2460 && cp <= 0x2473)
+    );
+  }
+
+  /**
+   * PDF.js 直排時，Range 量到的常是「很寬、很扁」的錯誤外框；維持中心點對調寬高以接近真實直書字元。
+   */
+  function normalizeCjkGlyphClientRect(rect, ch) {
+    const w = rect.width || 0;
+    const h = rect.height || 0;
+    if (w <= 0 || h <= 0) {
+      return {
+        left: rect.left,
+        top: rect.top,
+        width: w,
+        height: h,
+        right: rect.right,
+        bottom: rect.bottom,
+      };
+    }
+    if (!isCjkLikeChar(ch)) {
+      return {
+        left: rect.left,
+        top: rect.top,
+        width: w,
+        height: h,
+        right: rect.right,
+        bottom: rect.bottom,
+      };
+    }
+    if (!isVerticalishSize(w, h) && isVerticalishSize(h, w)) {
+      const cx = rect.left + w * 0.5;
+      const cy = rect.top + h * 0.5;
+      const nw = h;
+      const nh = w;
+      const left = cx - nw * 0.5;
+      const top = cy - nh * 0.5;
+      return {
+        left,
+        top,
+        width: nw,
+        height: nh,
+        right: left + nw,
+        bottom: top + nh,
+      };
+    }
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: w,
+      height: h,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
+  }
+
+  /** span 為一般橫向排版（非 PDF 直排旋轉／直排 writing-mode） */
+  function spanLooksLikeHorizontalLayout(span) {
+    if (!span) return false;
+    const tStyle = getComputedStyle(span).transform;
+    const rotDeg = rotationDegFromComputedTransform(tStyle);
+    let a = ((rotDeg % 360) + 360) % 360;
+    if (a > 180) a -= 360;
+    const near90 = Math.abs(Math.abs(a) - 90) < 42;
+    if (near90) return false;
+    return !spanLooksVerticallyTypeset(span);
+  }
+
+  /**
+   * 橫書下 Range 常同時回傳「整行殘影」的細長豎條與正常字元框；若優先選豎條，顿號「、」等會變超高窄條，排序／高亮錯亂。
+   */
+  function pickReasonableGlyphRectFromList(list, ch, span) {
+    if (!list.length) return null;
+    const horizontal = spanLooksLikeHorizontalLayout(span);
+    // 橫書含英文／數字／帶圈碼：同樣排除「細長豎條」量測殘影（如 LED 的 D 下垂）
+    if (horizontal) {
+      const notSkinnyStick = list.filter(r => {
+        const w = r.width || 0;
+        const h = r.height || 0;
+        if (w <= 0 || h <= 0) return false;
+        return h <= w * 2.85;
+      });
+      const pool = notSkinnyStick.length ? notSkinnyStick : list;
+      pool.sort((a, b) => a.width * a.height - b.width * b.height);
+      return pool[0];
+    }
+    if (isCjkLikeChar(ch)) {
+      const vert = list.filter(r => isVerticalishSize(r.width, r.height));
+      const pool = vert.length ? vert : list;
+      pool.sort((a, b) => a.width * a.height - b.width * b.height);
+      return pool[0];
+    }
+    const sorted = [...list].sort((a, b) => a.width * a.height - b.width * b.height);
+    return sorted[0];
+  }
+
+  /**
+   * 同一字元可能回傳多個 client rect；取面積最小且（若可）符合直書比例者，避免整欄寬的扁條當成高亮。
+   * @param {Element} [span] 若為橫書 span，勿優先選細長豎條。
+   */
+  function pickGlyphRectsFromRange(range, ch, span) {
+    const raw = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0);
+    const list = raw.length ? raw.map(r => normalizeCjkGlyphClientRect(r, ch)) : [];
+    if (!list.length) {
+      const br = range.getBoundingClientRect();
+      if (!br || br.width <= 0 || br.height <= 0) return [];
+      const one = normalizeCjkGlyphClientRect(br, ch);
+      const picked = pickReasonableGlyphRectFromList([one], ch, span);
+      return picked ? [picked] : [];
+    }
+    const picked = pickReasonableGlyphRectFromList(list, ch, span);
+    return picked ? [picked] : [];
+  }
+
+  /** 從 getComputedStyle(span).transform 取得主要旋轉角（度），供 PDF.js 直書 rotate(90deg) 偵測 */
+  function rotationDegFromComputedTransform(transformStr) {
+    if (!transformStr || transformStr === 'none') return 0;
+    const rot = transformStr.match(/rotate\(\s*(-?[\d.]+)\s*deg\s*\)/);
+    if (rot) return parseFloat(rot[1]);
+    const m = transformStr.match(/matrix\(([^)]+)\)/);
+    if (m) {
+      const p = m[1].split(/[\s,]+/).map(parseFloat);
+      if (p.length >= 4 && p.every(Number.isFinite)) {
+        return (Math.atan2(p[1], p[0]) * 180) / Math.PI;
+      }
+    }
+    return 0;
+  }
+
+  /** 從 matrix(a,b,c,d,…) 取得旋轉角（弧度），含 rotate+scaleX 合成矩陣 */
+  function rotationRadFromTransformMatrix(transformStr) {
+    if (!transformStr || transformStr === 'none') return 0;
+    const m = transformStr.match(/matrix\(([^)]+)\)/);
+    if (!m) return (rotationDegFromComputedTransform(transformStr) * Math.PI) / 180;
+    const p = m[1].split(/[\s,]+/).map(parseFloat);
+    if (p.length < 4 || !p.every(Number.isFinite)) return 0;
+    return Math.atan2(p[1], p[0]);
+  }
+
+  /**
+   * PDF.js 直書：常為 rotate(90deg)+scaleX，瀏覽器合成後仍是 matrix；用弧度判斷「明顯非水平字排」。
+   */
+  function transformLooksLikePdfVerticalSpan(span) {
+    if (!span) return false;
+    const t = getComputedStyle(span).transform;
+    const rad = Math.abs(rotationRadFromTransformMatrix(t));
+    const deg = (rad * 180) / Math.PI;
+    if (deg > 90) return Math.abs(deg - 180) > 25;
+    return deg > 25 && deg < 155;
+  }
+
+  /** span 上 getComputedStyle 的 writing-mode 為直排／側排（與 PDF transform 分開，部分檔案只靠樣式標直橫） */
+  function computedWritingModeIsVertical(span) {
+    if (!span) return false;
+    try {
+      const wm = (getComputedStyle(span).writingMode || '').toLowerCase();
+      return wm.includes('vertical') || wm.includes('sideways');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 文字層中的明確換行／分段（橫書多行段落常見；直書欄內較少出現在單一寬 span 內） */
+  function spanTextContainsExplicitLineBreak(raw) {
+    if (!raw || typeof raw !== 'string') return false;
+    return /[\n\r\u2028\u2029]/.test(raw);
+  }
+
+  /**
+   * 該 span 是否為直書排版語意：旋轉矩陣、writing-mode 直排、或直排用 text-combine-upright。
+   * 供頁面掃描、標記取字、spanIsVertical 與 transform 偵測一致。
+   */
+  function spanLooksVerticallyTypeset(span) {
+    if (!span) return false;
+    if (transformLooksLikePdfVerticalSpan(span)) return true;
+    if (computedWritingModeIsVertical(span)) return true;
+    try {
+      const tc = (getComputedStyle(span).textCombineUpright || '').toLowerCase();
+      if (tc && tc !== 'none' && tc !== 'initial' && tc !== 'inherit') {
+        return true;
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    return false;
+  }
+
+  /** CJK + 已判定為直書矩陣：若外框仍「橫寬>縱高」則再對調一次（scaleX 後 AABB 仍可能很扁） */
+  function coerceTallNarrowCjkRect(rect, ch) {
+    if (!rect || !isCjkLikeChar(ch)) return rect;
+    let r = normalizeCjkGlyphClientRect(rect, ch);
+    const w = r.width;
+    const h = r.height;
+    if (w <= 0 || h <= 0) return r;
+    if (w > h * 1.06) {
+      const cx = r.left + w * 0.5;
+      const cy = r.top + h * 0.5;
+      const nw = h;
+      const nh = w;
+      const left = cx - nw * 0.5;
+      const top = cy - nh * 0.5;
+      return {
+        left,
+        top,
+        width: nw,
+        height: nh,
+        right: left + nw,
+        bottom: top + nh,
+      };
+    }
+    return r;
+  }
+
+  /**
+   * 橫書：限制單字高亮外框勿成「貫穿整行的細長條」，並與 span 行高對齊（顿號、注音旁字常見）。
+   */
+  function clampHorizontalGlyphBBox(rect, span) {
+    if (!rect || !span) return rect;
+    const sr = span.getBoundingClientRect();
+    const sh = sr.height;
+    if (sh <= 1) return rect;
+    const w = rect.width;
+    const h = rect.height;
+    if (w <= 0 || h <= 0) return rect;
+    const cx = rect.left + w / 2;
+    const cy = rect.top + h / 2;
+    const lineCap = Math.min(sh * 1.12, sh + 6);
+    let nw = w;
+    let nh = h;
+    if (nh > nw * 2.1) {
+      nh = Math.min(nh, lineCap, Math.max(nw * 1.55, sh * 0.94));
+      nw = Math.max(nw, nh * 0.36);
+    }
+    if (nw > nh * 2.75) {
+      nw = Math.min(nw, Math.max(nh * 2.05, sh * 0.52));
+      nh = Math.min(Math.max(nh, sh * 0.76), lineCap);
+    }
+    const left = cx - nw / 2;
+    const top = cy - nh / 2;
+    return {
+      left,
+      top,
+      width: nw,
+      height: nh,
+      right: left + nw,
+      bottom: top + nh,
+    };
+  }
+
+  /**
+   * PDF.js 直書：span 常帶 rotate(±90deg)+scaleX；Range 量到整段 span 的軸對齊外框（一條橫扁帶）。
+   * - 多字元且單字矩形覆蓋 span 大半面積：沿 span **較長邊**均分（不再依賴 near90）。
+   * - 單字元且為直書矩陣 span：一律以 span 外框為基準再 coerce 成窄高。
+   * - 其餘：維持 normalize + 橫扁時改採 span 外框。
+   */
+  function refineGlyphRectWithSpan(span, candidateRect, charIndex, charsInNode, ch) {
+    if (!candidateRect || !span) return candidateRect;
+    const spanRect = span.getBoundingClientRect();
+    const sArea = Math.max(1e-6, spanRect.width * spanRect.height);
+    const cArea = Math.max(1, candidateRect.width * candidateRect.height);
+    const normCand = normalizeCjkGlyphClientRect(candidateRect, ch);
+    const tStyle = getComputedStyle(span).transform;
+    const rotDeg = rotationDegFromComputedTransform(tStyle);
+    let a = ((rotDeg % 360) + 360) % 360;
+    if (a > 180) a -= 360;
+    const near90 = Math.abs(Math.abs(a) - 90) < 42;
+    const verticalSpan = near90 || spanLooksVerticallyTypeset(span);
+    // 橫書 span 內多字元（含英文如 LED）亦做橫向均分，避免單字 Range 量到跨行殘影
+    const wholeSpanHit =
+      charsInNode > 1 && cArea >= sArea * 0.48 && (!verticalSpan || isCjkLikeChar(ch));
+
+    if (wholeSpanHit) {
+      const sr0 = normalizeCjkGlyphClientRect(spanRect, ch);
+      const w0 = sr0.width;
+      const h0 = sr0.height;
+      const l0 = sr0.left;
+      const t0 = sr0.top;
+      if (h0 >= w0 * 1.04) {
+        const slice = h0 / charsInNode;
+        const top = a < 0 ? t0 + (charsInNode - 1 - charIndex) * slice : t0 + charIndex * slice;
+        return coerceTallNarrowCjkRect(
+          {
+            left: l0,
+            top,
+            width: w0,
+            height: slice,
+            right: l0 + w0,
+            bottom: top + slice,
+          },
+          ch
+        );
+      }
+      if (w0 >= h0 * 1.04) {
+        const slice = w0 / charsInNode;
+        const left = a < 0 ? l0 + (charsInNode - 1 - charIndex) * slice : l0 + charIndex * slice;
+        const sliced = coerceTallNarrowCjkRect(
+          {
+            left,
+            top: t0,
+            width: slice,
+            height: h0,
+            right: left + slice,
+            bottom: t0 + h0,
+          },
+          ch
+        );
+        return verticalSpan ? sliced : clampHorizontalGlyphBBox(sliced, span);
+      }
+    }
+
+    if (charsInNode === 1 && isCjkLikeChar(ch) && verticalSpan) {
+      return coerceTallNarrowCjkRect(spanRect, ch);
+    }
+
+    if (charsInNode === 1 && isCjkLikeChar(ch)) {
+      const flat = normCand.width > normCand.height * 1.12;
+      if (flat && verticalSpan) {
+        return coerceTallNarrowCjkRect(spanRect, ch);
+      }
+      if (flat && !verticalSpan) {
+        return clampHorizontalGlyphBBox(normCand, span);
+      }
+    }
+
+    if (verticalSpan && isCjkLikeChar(ch)) {
+      return coerceTallNarrowCjkRect(normCand, ch);
+    }
+
+    if (!verticalSpan) {
+      return clampHorizontalGlyphBBox(normCand, span);
+    }
+
+    return normCand;
+  }
+
+  /** 頁級直書推斷結果快取（縮放／旋轉／重繪後清除） */
+  const verticalReadingModeByPage = new Map();
+
+  /**
+   * 頁面閱讀版面：vertical / horizontal / mixed（直橫並存，取字時逐 span／字元混合排序）
+   * @typedef {{ mode: 'vertical'|'horizontal'|'mixed', vRatio: number, hRatio: number, pageVertical: boolean, newlineWideRatio?: number, geometryVerticalHint?: boolean|null }} PageReadingLayoutMeta
+   */
+  const pageReadingLayoutMetaByPage = new Map();
+
+  const PAGE_LAYOUT_FALLBACK = {
+    mode: 'horizontal',
+    vRatio: 0,
+    hRatio: 0,
+    pageVertical: false,
+    newlineWideRatio: 0,
+    geometryVerticalHint: null,
+  };
+
+  function clearVerticalReadingModeCacheForPage(pageNumber) {
+    if (pageNumber != null && pageNumber !== '') {
+      const pn = Number(pageNumber);
+      verticalReadingModeByPage.delete(pn);
+      pageReadingLayoutMetaByPage.delete(pn);
+    } else {
+      verticalReadingModeByPage.clear();
+      pageReadingLayoutMetaByPage.clear();
+    }
+  }
+
+  /**
+   * 與專案根目錄 **index.htm**（PDF.js 2.11 `renderTextLayer`）相同的直書幾何判斷：
+   * 多數 span 外框「寬度 &lt; 高度×0.8」且各 span **x 中心**的標準差相對「平均字寬」不大 → 視為直書欄。
+   *
+   * **為何 web/index.html 以前較差**：全功能 viewer（PDF.js 4.x）常把直排字用 `transform: matrix(…)` 畫成
+   * **橫向包圍盒**，`width ≥ height` 的 span 變多，僅統計「直排 transform」比例會低估直書；index.htm 則易得到窄高 span。
+   * 此函式把舊頁有效的幾何訊號併入，與 transform／writing-mode 互補。
+   *
+   * @returns {boolean|null} true／false 有把握；null 樣本不足或不明
+   */
+  function geometrySuggestsVerticalTextLayerLegacyHeuristic(textLayer) {
+    if (!textLayer) return null;
+    const cfg = typeof window !== 'undefined' ? window.PDF_VIEWER_CONFIG || {} : {};
+    const minSpans =
+      typeof cfg.READING_GEOMETRY_VERTICAL_MIN_SPANS === 'number'
+        ? cfg.READING_GEOMETRY_VERTICAL_MIN_SPANS
+        : 10;
+    const narrowTh =
+      typeof cfg.READING_GEOMETRY_VERTICAL_NARROW_RATIO === 'number'
+        ? cfg.READING_GEOMETRY_VERTICAL_NARROW_RATIO
+        : 0.6;
+    const xVarMult =
+      typeof cfg.READING_GEOMETRY_VERTICAL_XVAR_AVGW_MULT === 'number'
+        ? cfg.READING_GEOMETRY_VERTICAL_XVAR_AVGW_MULT
+        : 3;
+
+    const tl = textLayer.getBoundingClientRect();
+    if (tl.width < 1 || tl.height < 1) return null;
+
+    const spanData = [];
+    for (const span of textLayer.querySelectorAll('span')) {
+      const t = (span.textContent || '').replace(/\s/g, '');
+      if (!t) continue;
+      const rect = span.getBoundingClientRect();
+      const w = rect.width;
+      const h = rect.height;
+      if (w <= 0.5 || h <= 0.5) continue;
+      const centerX = rect.left + w * 0.5 - tl.left;
+      spanData.push({ w, h, centerX });
+      if (spanData.length >= 160) break;
+    }
+
+    if (spanData.length < minSpans) return null;
+
+    let narrow = 0;
+    let avgX = 0;
+    let avgW = 0;
+    const n = spanData.length;
+    for (const d of spanData) {
+      avgX += d.centerX;
+      avgW += d.w;
+      if (d.w < d.h * 0.8) narrow++;
+    }
+    avgX /= n;
+    avgW /= n;
+
+    let xVarSum = 0;
+    for (const d of spanData) {
+      const dx = d.centerX - avgX;
+      xVarSum += dx * dx;
+    }
+    const xVar = Math.sqrt(xVarSum / n);
+    const narrowRatio = narrow / n;
+
+    if (narrowRatio > narrowTh && xVar < avgW * xVarMult) {
+      return true;
+    }
+    if (narrowRatio < 0.22 && xVar > avgW * 4.5) {
+      return false;
+    }
+    return null;
+  }
+
+  /**
+   * 掃描單頁文字層，快取直／橫／混合與比例（供載入預掃、朗讀取字、標記一致使用）。
+   */
+  function getPageReadingLayoutMeta(pageNumber) {
+    const pn = Number(pageNumber);
+    if (!pn || !Number.isFinite(pn)) {
+      return { ...PAGE_LAYOUT_FALLBACK };
+    }
+    if (pageReadingLayoutMetaByPage.has(pn)) {
+      return pageReadingLayoutMetaByPage.get(pn);
+    }
+    const textLayer = document.querySelector(`.page[data-page-number="${pn}"] .textLayer`);
+    if (!textLayer) {
+      const emptyMeta = { ...PAGE_LAYOUT_FALLBACK };
+      pageReadingLayoutMetaByPage.set(pn, emptyMeta);
+      verticalReadingModeByPage.set(pn, false);
+      return emptyMeta;
+    }
+    const cfg = typeof window !== 'undefined' ? window.PDF_VIEWER_CONFIG || {} : {};
+    const vMin =
+      typeof cfg.READING_VERTICAL_MIN_TRANSFORM_RATIO === 'number'
+        ? cfg.READING_VERTICAL_MIN_TRANSFORM_RATIO
+        : 0.38;
+    const hMax =
+      typeof cfg.READING_HORIZONTAL_SPAN_MAX_RATIO === 'number'
+        ? cfg.READING_HORIZONTAL_SPAN_MAX_RATIO
+        : 0.44;
+    const mixV =
+      typeof cfg.READING_MIXED_MIN_V_RATIO === 'number' ? cfg.READING_MIXED_MIN_V_RATIO : 0.16;
+    const mixH =
+      typeof cfg.READING_MIXED_MIN_H_RATIO === 'number' ? cfg.READING_MIXED_MIN_H_RATIO : 0.18;
+    const newlineWideBoost =
+      typeof cfg.READING_NEWLINE_WIDE_HORIZ_BOOST === 'number'
+        ? cfg.READING_NEWLINE_WIDE_HORIZ_BOOST
+        : 0.42;
+
+    let n = 0;
+    let vertTransforms = 0;
+    let horizBoxSpans = 0;
+    let newlineWideCount = 0;
+    for (const span of textLayer.querySelectorAll('span')) {
+      const rawFull = span.textContent || '';
+      const t = rawFull.replace(/\s/g, '');
+      if (!t) continue;
+      n++;
+      const vt = spanLooksVerticallyTypeset(span);
+      if (vt) {
+        vertTransforms++;
+      } else {
+        const sr = span.getBoundingClientRect();
+        const wide = sr.width > 0 && sr.height > 0 && sr.width >= sr.height * 0.88;
+        if (wide) {
+          horizBoxSpans++;
+          if (spanTextContainsExplicitLineBreak(rawFull)) {
+            horizBoxSpans += newlineWideBoost;
+            newlineWideCount++;
+          }
+        }
+      }
+      if (n >= 120) break;
+    }
+    const vRatio = n ? vertTransforms / n : 0;
+    const hRatio = n ? Math.min(1.05, horizBoxSpans / n) : 0;
+
+    let pageVertical = vRatio >= vMin && hRatio <= hMax && vRatio > hRatio;
+    if (!pageVertical && vRatio >= 0.26 && hRatio <= 0.18) {
+      pageVertical = true;
+    }
+    if (!pageVertical) {
+      try {
+        const wm = (getComputedStyle(textLayer).writingMode || '').toLowerCase();
+        if (wm.includes('vertical') || wm.includes('sideways')) pageVertical = true;
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
+    let geometryVerticalHint = null;
+    if (cfg.READING_GEOMETRY_VERTICAL_ENABLED !== false) {
+      geometryVerticalHint = geometrySuggestsVerticalTextLayerLegacyHeuristic(textLayer);
+      if (geometryVerticalHint === true) {
+        pageVertical = true;
+      } else if (geometryVerticalHint === false && vRatio < 0.22) {
+        pageVertical = false;
+      }
+    }
+
+    let mode = pageVertical ? 'vertical' : 'horizontal';
+    if (vRatio >= mixV && hRatio >= mixH) {
+      mode = 'mixed';
+    } else if (pageVertical && hRatio >= 0.32) {
+      mode = 'mixed';
+    } else if (!pageVertical && vRatio >= 0.24) {
+      mode = 'mixed';
+    }
+
+    const newlineWideRatio = n ? newlineWideCount / n : 0;
+    const meta = {
+      mode,
+      vRatio,
+      hRatio,
+      pageVertical,
+      newlineWideRatio,
+      geometryVerticalHint,
+    };
+    pageReadingLayoutMetaByPage.set(pn, meta);
+    verticalReadingModeByPage.set(pn, pageVertical);
+    return meta;
+  }
+
+  /**
+   * 依文字層推斷該頁是否為直書（與 edgetts 對照：edgetts 無頁級直書，橫書永遠 y→x）。
+   * 舊版僅用「直排 span ≥14%」易把橫書頁（標題／注音旋轉）誤判為整頁直書，導致欄排序錯亂。
+   * 改為：直排比例夠高 **且** 「明顯橫向外框」span 未過半；另保留 writing-mode: vertical 與強訊號備援。
+   */
+  function inferVerticalReadingModeForPage(pageNumber) {
+    return getPageReadingLayoutMeta(pageNumber).pageVertical;
+  }
+
+  /**
+   * 僅依「本次框選／標記收集到的字元」推斷是否為直書區塊，用於覆寫整頁推斷。
+   * 教材 PDF 常在直書正文旁有大量橫向注音 span，導致整頁 hRatio 過高而被判橫書，
+   * 多欄直書標記後「原始文字」會變成左欄→右欄（錯誤）；此處以字元外框高寬比與欄分群補救。
+   * @returns {boolean|null} true/false 強制直／橫；null 表示沿用 inferVerticalReadingModeForPage
+   */
+  function inferVerticalReadingModeForCollectedGlyphs(xywhList) {
+    if (!xywhList || xywhList.length < 4) return null;
+    let n = 0;
+    let tall = 0;
+    let sumW = 0;
+    const centers = [];
+    for (const g of xywhList) {
+      const w = Math.max(0, Number(g.w) || 0);
+      const h = Math.max(0, Number(g.h) || 0);
+      if (w < 1.5 || h < 1.5) continue;
+      n++;
+      sumW += w;
+      if (isVerticalishSize(w, h)) tall++;
+      centers.push({
+        cx: (Number(g.x) || 0) + w * 0.5,
+        cy: (Number(g.y) || 0) + h * 0.5,
+      });
+    }
+    if (n < 4) return null;
+    const tallRatio = tall / n;
+    const avgW = sumW / n;
+
+    // 區塊內多數字元外框為「高明顯大於寬」→ 直書欄排序（右→左、上→下）
+    if (tallRatio >= 0.36) return true;
+
+    // 至少兩欄：x 中心有明顯斷層，且仍有一定比例直向字框（含注音混排）
+    if (centers.length >= 5) {
+      centers.sort((a, b) => a.cx - b.cx);
+      const thr = Math.max(7, avgW * 0.42);
+      let colBreaks = 0;
+      for (let i = 1; i < centers.length; i++) {
+        if (centers[i].cx - centers[i - 1].cx > thr) colBreaks++;
+      }
+      const clusters = colBreaks + 1;
+      if (clusters >= 2 && tallRatio >= 0.16) return true;
+    }
+
+    // 幾乎都是扁寬框 → 明確橫書（覆寫整頁直書误判時用）
+    if (tallRatio <= 0.14) return false;
+
+    return null;
+  }
+
+  /**
+   * 標記／框選矩形內相交的 span：若正文為 PDF 直排 transform，字元外框常被 clamp 成橫向，
+   * 子集「高>寬」比例會失真；改以 span 的 computed transform 當強訊號（優先於子集幾何）。
+   * @returns {boolean|null} true=強制直書排序；false=強制橫書；null=交給子集／頁級
+   */
+  function inferVerticalFromIntersectedSpans(spans) {
+    if (!spans || !spans.length) return null;
+    let v = 0;
+    let h = 0;
+    let amb = 0;
+    for (const span of spans) {
+      const rawFull = span.textContent || '';
+      const raw = rawFull.replace(/\s/g, '');
+      if (!raw) continue;
+      let n = 0;
+      for (const _ of raw) n++;
+      if (spanLooksVerticallyTypeset(span)) {
+        v += n;
+      } else {
+        try {
+          const sr = span.getBoundingClientRect();
+          if (sr.width > 0 && sr.height > 0 && sr.width >= sr.height * 0.9) {
+            let hw = n;
+            if (spanTextContainsExplicitLineBreak(rawFull)) {
+              hw += n * 0.32;
+            }
+            h += hw;
+          } else {
+            amb += n;
+          }
+        } catch (e) {
+          amb += n;
+        }
+      }
+    }
+    const tot = v + h + amb;
+    if (tot < 4) return null;
+    if (v / tot >= 0.24) return true;
+    if (h / tot >= 0.55 && v / tot < 0.12) return false;
+    return null;
+  }
+
+  /**
+   * 直書（繁中常見）：欄位由右而左，欄內由上而下。
+   * 橫書：由上而下，同行由左而右。
+   */
+  function compareReadingOrderByClientRect(ra, rb) {
+    const vertA = isVerticalishSize(ra.width, ra.height);
+    const vertB = isVerticalishSize(rb.width, rb.height);
+    if (vertA && vertB) {
+      const dx = ra.left - rb.left;
+      if (Math.abs(dx) > 8) return rb.left - ra.left;
+      const dy = ra.top - rb.top;
+      if (Math.abs(dy) > 6) return dy;
+      return rb.left - ra.left;
+    }
+    const dy = ra.top - rb.top;
+    if (Math.abs(dy) > 6) return dy;
+    return ra.left - rb.left;
+  }
+
+  /**
+   * 橫書：依本批字元高度中位數推算「同行」容差；外框高低不一時用左上角 y 易錯行。
+   */
+  function horizontalLineToleranceForGlyphXYWHs(items, toXYWH) {
+    const hs = [];
+    for (const it of items) {
+      const g = toXYWH(it);
+      const h = Math.max(1, g.h || 0);
+      hs.push(h);
+    }
+    hs.sort((a, b) => a - b);
+    if (!hs.length) return 10;
+    const mid = hs[Math.floor(hs.length / 2)] || hs[0];
+    return Math.min(24, Math.max(8, mid * 0.45));
+  }
+
+  /**
+   * @param {boolean} forceVertical 由 inferVerticalReadingModeForPage 預先算出，避免 sort 比較器內重複掃 DOM
+   * @param {number} [lineTolerance] 橫書專用：比較字元 **垂直中心** 時的同行容差（px）
+   */
+  function compareReadingOrderGlyphsWithMode(a, b, forceVertical, lineTolerance) {
+    if (forceVertical) {
+      const dx = a.x - b.x;
+      if (Math.abs(dx) > 8) return b.x - a.x;
+      const dy = a.y - b.y;
+      if (Math.abs(dy) > 6) return dy;
+      return b.x - a.x;
+    }
+    const tol =
+      typeof lineTolerance === 'number' && lineTolerance > 0 ? lineTolerance : 10;
+    const acy = a.y + (a.h || 0) * 0.5;
+    const bcy = b.y + (b.h || 0) * 0.5;
+    const dy = acy - bcy;
+    if (Math.abs(dy) > tol) return dy;
+    return a.x - b.x;
+  }
+
+  function medianOfPositive(nums) {
+    const a = nums.filter(n => Number.isFinite(n) && n > 0).sort((x, y) => x - y);
+    if (!a.length) return 0;
+    return a[Math.floor(a.length / 2)];
+  }
+
+  /**
+   * 直書多欄：欄內字元 x 中心常有數 px 抖動；固定 8px 會把同欄上下字判成「換欄」而順序錯亂。
+   * 依字寬與 x 分佈最大空隙估「欄間距」下沿的自適應容差。
+   */
+  function verticalInterColumnTolerance(chunk, toXYWH) {
+    if (!chunk.length) return 14;
+    const ws = chunk.map(it => Math.max(1, toXYWH(it).w || 0));
+    const medianW = medianOfPositive(ws) || 12;
+    const cxs = chunk
+      .map(it => {
+        const g = toXYWH(it);
+        return (Number(g.x) || 0) + Math.max(1, g.w || 0) * 0.5;
+      })
+      .sort((a, b) => a - b);
+    if (cxs.length < 2) {
+      return Math.min(44, Math.max(8, medianW * 0.78));
+    }
+    let maxGap = 0;
+    for (let i = 1; i < cxs.length; i++) {
+      maxGap = Math.max(maxGap, cxs[i] - cxs[i - 1]);
+    }
+    const tFromW = medianW * 0.72;
+    const tFromGap = maxGap > medianW * 1.55 ? maxGap * 0.3 : 0;
+    return Math.min(46, Math.max(7, Math.max(tFromW, tFromGap)));
+  }
+
+  /** 直書：不同欄比較 x（容差內視同欄）；欄由右→左；同欄上→下 */
+  function compareReadingOrderGlyphsVerticalWithTolerance(a, b, colTol) {
+    const acx = (Number(a.x) || 0) + (Number(a.w) || 0) * 0.5;
+    const bcx = (Number(b.x) || 0) + (Number(b.w) || 0) * 0.5;
+    const acy = (Number(a.y) || 0) + (Number(a.h) || 0) * 0.5;
+    const bcy = (Number(b.y) || 0) + (Number(b.h) || 0) * 0.5;
+    const tol = Math.max(6, Math.min(50, colTol || 14));
+    if (Math.abs(acx - bcx) > tol) {
+      return bcx - acx;
+    }
+    if (Math.abs(acy - bcy) > 0.35) {
+      return acy - bcy;
+    }
+    return acx - bcx;
+  }
+
+  /** 無頁級資訊時視為橫書 */
+  function compareReadingOrderGlyphs(a, b) {
+    return compareReadingOrderGlyphsWithMode(a, b, false, undefined);
+  }
+
+  function chunkHasExplicitMixedSpanFlags(chunk) {
+    let t = 0;
+    let f = 0;
+    for (const it of chunk) {
+      if (it.spanIsVertical === true) t++;
+      else if (it.spanIsVertical === false) f++;
+    }
+    return t > 0 && f > 0;
+  }
+
+  /**
+   * 單一字元排序時是否依「直書欄」規則；無 span 標記時看頁面 layout 與外框比例。
+   */
+  function glyphPrefersVerticalSortForReading(it, toXYWH) {
+    if (it.spanIsVertical === true) return true;
+    if (it.spanIsVertical === false) return false;
+    const g = toXYWH(it);
+    const w = Math.max(0, g.w || 0);
+    const h = Math.max(0, g.h || 0);
+    const pn = Number(it.pageNumber) || 0;
+    const meta = pn > 0 ? getPageReadingLayoutMeta(pn) : null;
+    if (!meta || meta.mode === 'horizontal') {
+      return isVerticalishSize(w, h);
+    }
+    if (meta.mode === 'vertical') {
+      return true;
+    }
+    return isVerticalishSize(w, h);
+  }
+
+  function sortGlyphChunkHybridReading(chunk, toXYWH) {
+    const vertPart = chunk.filter(it => glyphPrefersVerticalSortForReading(it, toXYWH));
+    const colTolV = verticalInterColumnTolerance(vertPart.length >= 2 ? vertPart : chunk, toXYWH);
+    const horizPart = chunk.filter(it => !glyphPrefersVerticalSortForReading(it, toXYWH));
+    const lineTolH = horizontalLineToleranceForGlyphXYWHs(horizPart.length >= 2 ? horizPart : chunk, toXYWH);
+    chunk.sort((ia, ib) => {
+      const va = glyphPrefersVerticalSortForReading(ia, toXYWH);
+      const vb = glyphPrefersVerticalSortForReading(ib, toXYWH);
+      const a = toXYWH(ia);
+      const b = toXYWH(ib);
+      if (va && vb) {
+        return compareReadingOrderGlyphsVerticalWithTolerance(a, b, colTolV);
+      }
+      if (!va && !vb) {
+        return compareReadingOrderGlyphsWithMode(a, b, false, lineTolH);
+      }
+      return compareReadingOrderByClientRect(
+        { left: a.x, top: a.y, width: a.w, height: a.h },
+        { left: b.x, top: b.y, width: b.w, height: b.h }
+      );
+    });
+  }
+
+  /**
+   * 單頁字元區塊排序（標記／框選／整頁共用邏輯）。
+   * @param {{ useSubsetVerticalInference?: boolean, spanVerticalHint?: boolean|null, workSpansForHint?: Element[], pageNumber?: number, forceHybridSort?: boolean }} options
+   */
+  function sortSinglePageGlyphChunk(chunk, toXYWH, options = {}) {
+    if (!chunk.length) return;
+    const p = options.pageNumber ?? chunk[0]?.pageNumber ?? 0;
+    let fv = p > 0 && inferVerticalReadingModeForPage(p);
+
+    let sh = options.spanVerticalHint;
+    const wsh = options.workSpansForHint;
+    if (wsh && wsh.length && p > 0) {
+      const sub = wsh.filter(
+        s => parseInt(s.closest('.page')?.dataset?.pageNumber || '0', 10) === p
+      );
+      const local = inferVerticalFromIntersectedSpans(sub);
+      if (local === true || local === false) {
+        sh = local;
+      }
+    }
+    if (sh === true) {
+      fv = true;
+    } else if (sh === false) {
+      fv = false;
+    } else if (options.useSubsetVerticalInference && chunk.length >= 4) {
+      const hint = inferVerticalReadingModeForCollectedGlyphs(chunk.map(it => toXYWH(it)));
+      if (hint !== null && hint !== undefined) {
+        fv = hint;
+      }
+    }
+
+    const meta = p > 0 ? getPageReadingLayoutMeta(p) : null;
+    const useHybrid =
+      options.forceHybridSort === true ||
+      meta?.mode === 'mixed' ||
+      chunkHasExplicitMixedSpanFlags(chunk);
+
+    if (useHybrid) {
+      sortGlyphChunkHybridReading(chunk, toXYWH);
+      return;
+    }
+    if (fv) {
+      const colTol = verticalInterColumnTolerance(chunk, toXYWH);
+      chunk.sort((ia, ib) => {
+        const a = toXYWH(ia);
+        const b = toXYWH(ib);
+        return compareReadingOrderGlyphsVerticalWithTolerance(a, b, colTol);
+      });
+    } else {
+      const lineTol = horizontalLineToleranceForGlyphXYWHs(chunk, toXYWH);
+      chunk.sort((ia, ib) => {
+        const a = toXYWH(ia);
+        const b = toXYWH(ib);
+        return compareReadingOrderGlyphsWithMode(a, b, false, lineTol);
+      });
+    }
+  }
+
+  /**
+   * 多頁字元各頁推斷直書後再排序接回。
+   * @param {{ useSubsetVerticalInference?: boolean, spanVerticalHint?: boolean|null, workSpansForHint?: Element[] }} [options]
+   *        workSpansForHint：與選區相交的 span，依頁分別做 transform 推斷（框選未帶 pageFilter 時仍有效）
+   */
+  function sortGlyphLikeListByReadingOrder(items, toXYWH, options = {}) {
+    const byPage = new Map();
+    for (const item of items) {
+      const p = item.pageNumber || 0;
+      if (!byPage.has(p)) byPage.set(p, []);
+      byPage.get(p).push(item);
+    }
+    const pageNums = Array.from(byPage.keys()).sort((a, b) => a - b);
+    const out = [];
+    for (const p of pageNums) {
+      const chunk = byPage.get(p);
+      sortSinglePageGlyphChunk(chunk, toXYWH, { ...options, pageNumber: p });
+      out.push(...chunk);
+    }
+    return out;
+  }
+
+  /** 避免直書窄字被強制 min 0.1% 寬高變成「橫向方塊」 */
+  function highlightPercentDims(relWidth, relHeight) {
+    const rw = Math.max(0, relWidth || 0) * 100;
+    const rh = Math.max(0, relHeight || 0) * 100;
+    const minW = rh > rw * 1.25 ? 0.02 : 0.1;
+    const minH = rw > rh * 1.25 ? 0.02 : 0.1;
+    return {
+      w: Math.max(minW, rw),
+      h: Math.max(minH, rh),
+    };
   }
 
   /** PDF 文字層常把 ① 拆成「○」「１」等不同 span；若以字元座標全域排序會與閱讀順序錯亂。改依 span 順序 + span 內字元順序。 */
   function compareSpanReadingOrder(a, b) {
     const ra = a.getBoundingClientRect();
     const rb = b.getBoundingClientRect();
-    const dy = ra.top - rb.top;
-    if (Math.abs(dy) > 6) return dy;
-    return ra.left - rb.left;
+    return compareReadingOrderByClientRect(ra, rb);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.pdfViewerSpanReadingCompare = (a, b) => compareSpanReadingOrder(a, b);
+    /** 供 viewer-reading-marks 等：與朗讀高亮同一套直書 rect 修正 */
+    window.pdfViewerGlyphRectsForCharRange = (range, span, charIndex, charsInNode, ch) => {
+      if (!range) return [];
+      const picked = pickGlyphRectsFromRange(range, ch, span);
+      const r0 = picked[0];
+      if (!r0) return [];
+      if (span && typeof span.getBoundingClientRect === 'function') {
+        return [refineGlyphRectWithSpan(span, r0, charIndex, charsInNode, ch)];
+      }
+      return [r0];
+    };
   }
 
   function iouClientRects(a, b) {
@@ -276,28 +1212,127 @@
     return t;
   }
 
-  // 收集框內文字，並同時回傳被框住的字元矩形
-  function collectTextAndSpansInFrame() {
-    const frameRect = frame.getBoundingClientRect();
-    const spans = Array.from(document.querySelectorAll('#viewerContainer .textLayer span'));
-    const hitRects = [];
-    const seenHighlightKeys = new Set();
-    const orderedGlyphs = [];
-    const seenGlyphPosByChar = new Map();
+  /**
+   * 將「螢幕座標」下的矩形轉成 .textLayer 內 left/top/width/height 所用的百分比（0~1）。
+   * 必須與 PDF.js EditorUIManager.getSelectionBoxes（pdf.mjs）依 data-main-rotation 的公式一致；
+   * 僅用 (x-layerX)/layerW 在 rotation 90/180/270 時會錯位，直書／旋轉頁看起來像一整條橫的。
+   */
+  function clientRectToTextLayerPercentages(textLayerEl, clientBox) {
+    const layerRect = textLayerEl.getBoundingClientRect();
+    const layerX = layerRect.left;
+    const layerY = layerRect.top;
+    const parentWidth = layerRect.width || 1;
+    const parentHeight = layerRect.height || 1;
+    const x = clientBox.left;
+    const y = clientBox.top;
+    const w = clientBox.width;
+    const h = clientBox.height;
+    const rot = textLayerEl.getAttribute('data-main-rotation') || '0';
+    let relLeft;
+    let relTop;
+    let relWidth;
+    let relHeight;
+    switch (rot) {
+      case '90':
+        relLeft = (y - layerY) / parentHeight;
+        relTop = 1 - (x + w - layerX) / parentWidth;
+        relWidth = h / parentHeight;
+        relHeight = w / parentWidth;
+        break;
+      case '180':
+        relLeft = 1 - (x + w - layerX) / parentWidth;
+        relTop = 1 - (y + h - layerY) / parentHeight;
+        relWidth = w / parentWidth;
+        relHeight = h / parentHeight;
+        break;
+      case '270':
+        relLeft = 1 - (y + h - layerY) / parentHeight;
+        relTop = (x - layerX) / parentWidth;
+        relWidth = h / parentHeight;
+        relHeight = w / parentWidth;
+        break;
+      default:
+        relLeft = (x - layerX) / parentWidth;
+        relTop = (y - layerY) / parentHeight;
+        relWidth = w / parentWidth;
+        relHeight = h / parentHeight;
+        break;
+    }
+    return { relLeft, relTop, relWidth, relHeight };
+  }
 
-    const sortedSpans = dedupeBoldOverlaySpans(spans
-      .filter(span => {
-        const spanRect = span.getBoundingClientRect();
-        return !(
-          spanRect.right < frameRect.left ||
-          spanRect.left > frameRect.right ||
-          spanRect.bottom < frameRect.top ||
-          spanRect.top > frameRect.bottom
-        );
-      })
-      .sort(compareSpanReadingOrder));
+  if (typeof window !== 'undefined') {
+    window.pdfViewerClientRectToTextLayerPercents = clientRectToTextLayerPercentages;
+  }
 
-    sortedSpans.forEach(span => {
+  /** 與朗讀用 ordered/deduped 字元同一組座標，避免 hitRects 掃描順序與實際文本不一致 */
+  function buildRectMetaFromCollectedGlyph(g) {
+    const pageNumber = g.pageNumber;
+    if (!pageNumber) return null;
+    const textLayerEl = document.querySelector(
+      `.page[data-page-number="${pageNumber}"] .textLayer`
+    );
+    const layerRect = textLayerEl?.getBoundingClientRect();
+    if (!textLayerEl || !layerRect || layerRect.width < 1 || layerRect.height < 1) return null;
+    const left = g.x;
+    const top = g.y;
+    const width = g.w;
+    const height = g.h;
+    const rel = clientRectToTextLayerPercentages(textLayerEl, { left, top, width, height });
+    return {
+      left,
+      top,
+      width,
+      height,
+      pageNumber,
+      layerClass: 'textLayer',
+      relLeft: rel.relLeft,
+      relTop: rel.relTop,
+      relWidth: rel.relWidth,
+      relHeight: rel.relHeight,
+    };
+  }
+
+  /**
+   * 收集與 client 矩形相交的字元（不依 span DOM 順序串接）。
+   * 直書多欄時 PDF 的 span 順序常與閱讀序不同；先收集再依頁級直書推斷＋幾何排序（與 getPageGlyphs 一致）。
+   */
+  function collectGlyphsIntersectingClientRect(frameRect, opts = {}) {
+    const pageFilter = opts.pageNumber;
+    const minOverlap = opts.minOverlapRatio ?? 0.55;
+
+    const fr = {
+      left: frameRect.left,
+      top: frameRect.top,
+      right: frameRect.right,
+      bottom: frameRect.bottom,
+    };
+
+    const spans = Array.from(document.querySelectorAll('#viewerContainer .textLayer span')).filter(span => {
+      if (pageFilter != null) {
+        const pn = parseInt(span.closest('.page')?.dataset?.pageNumber || '0', 10);
+        if (pn !== pageFilter) return false;
+      }
+      const spanRect = span.getBoundingClientRect();
+      return !(
+        spanRect.right < fr.left ||
+        spanRect.left > fr.right ||
+        spanRect.bottom < fr.top ||
+        spanRect.top > fr.bottom
+      );
+    });
+
+    const workSpans = dedupeBoldOverlaySpans(spans);
+    const sortOpts = {
+      useSubsetVerticalInference: true,
+      workSpansForHint: workSpans,
+    };
+    const raw = [];
+
+    for (const span of workSpans) {
+      const pageNumber = parseInt(span.closest('.page')?.dataset?.pageNumber || '0', 10) || 0;
+      if (!pageNumber) continue;
+
       const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
       let textNode;
       while ((textNode = walker.nextNode())) {
@@ -308,81 +1343,87 @@
           const range = document.createRange();
           range.setStart(textNode, i);
           range.setEnd(textNode, i + 1);
-          const rectList = range.getClientRects();
-          let hit = false;
+          const rectList = pickGlyphRectsFromRange(range, txt[i], span);
           let representativeRect = null;
 
-          for (const r of rectList) {
-            if (!isRectHit(frameRect, r)) continue;
-            hit = true;
-            representativeRect ||= r;
-            const rectKey = `${Math.round(r.left)}|${Math.round(r.top)}|${Math.round(r.width)}|${Math.round(r.height)}`;
-            if (!seenHighlightKeys.has(rectKey)) {
-              seenHighlightKeys.add(rectKey);
-              const textLayerEl = span.closest('.textLayer');
-              const layerRect = textLayerEl?.getBoundingClientRect();
-              const pageEl = span.closest('.page');
-              const pageNumber = parseInt(pageEl?.dataset?.pageNumber || '0', 10) || 0;
-              const relLeft = layerRect ? (r.left - layerRect.left) / (layerRect.width || 1) : 0;
-              const relTop = layerRect ? (r.top - layerRect.top) / (layerRect.height || 1) : 0;
-              const relWidth = layerRect ? r.width / (layerRect.width || 1) : 0;
-              const relHeight = layerRect ? r.height / (layerRect.height || 1) : 0;
-              hitRects.push({
-                left: r.left,
-                top: r.top,
-                width: r.width,
-                height: r.height,
-                pageNumber,
-                layerClass: 'textLayer',
-                relLeft,
-                relTop,
-                relWidth,
-                relHeight,
-              });
-            }
+          for (const r0 of rectList) {
+            const r = refineGlyphRectWithSpan(span, r0, i, txt.length, txt[i]);
+            if (!r || r.width <= 0 || r.height <= 0) continue;
+            const rr = {
+              left: r.left,
+              top: r.top,
+              right: r.right,
+              bottom: r.bottom,
+              width: r.width,
+              height: r.height,
+            };
+            if (!isRectHitFlexible(fr, rr, minOverlap)) continue;
+            representativeRect = r;
+            break;
           }
 
-          if (hit && representativeRect) {
-            const ch = txt[i];
-            const gx = representativeRect.left;
-            const gy = representativeRect.top;
-            const prior = seenGlyphPosByChar.get(ch) || [];
-            const duplicatedByPosition = prior.some(p =>
-              Math.abs(p.x - gx) <= 3 && Math.abs(p.y - gy) <= 3
-            );
-            if (!duplicatedByPosition) {
-              prior.push({ x: gx, y: gy });
-              seenGlyphPosByChar.set(ch, prior);
-              orderedGlyphs.push({
-                ch,
-                x: gx,
-                y: gy,
-                w: representativeRect.width,
-                h: representativeRect.height,
-              });
-            }
+          if (representativeRect) {
+            raw.push({
+              ch: txt[i],
+              x: representativeRect.left,
+              y: representativeRect.top,
+              w: representativeRect.width,
+              h: representativeRect.height,
+              pageNumber,
+              spanIsVertical: spanLooksVerticallyTypeset(span),
+            });
           }
         }
       }
-    });
-
-    // 粗體/陰影：連續同字元且座標極接近只留一個（保持串接順序）
-    const deduped = [];
-    for (const g of orderedGlyphs) {
-      const prev = deduped[deduped.length - 1];
-      if (
-        prev &&
-        prev.ch === g.ch &&
-        Math.abs(prev.x - g.x) <= 3 &&
-        Math.abs(prev.y - g.y) <= 3
-      ) {
-        continue;
-      }
-      deduped.push(g);
     }
 
+    const sortedRaw = sortGlyphLikeListByReadingOrder(
+      raw,
+      g => ({
+        x: g.x,
+        y: g.y,
+        w: g.w,
+        h: g.h,
+      }),
+      sortOpts
+    );
+
+    const deduped = [];
+    for (const g of sortedRaw) {
+      const duplicated = deduped.some(
+        d => d.ch === g.ch && Math.abs(d.x - g.x) <= 3 && Math.abs(d.y - g.y) <= 3
+      );
+      if (!duplicated) deduped.push(g);
+    }
+    return deduped;
+  }
+
+  // 收集框內文字，並同時回傳被框住的字元矩形
+  function collectTextAndSpansInFrame() {
+    const frameRect = frame.getBoundingClientRect();
+    const deduped = collectGlyphsIntersectingClientRect(frameRect, { minOverlapRatio: 0.55 });
     const text = collapseAdjacentDuplicateCjkRuns(deduped.map(g => g.ch).join(''));
-    return { text, rects: hitRects };
+    const rects = deduped.map(g => buildRectMetaFromCollectedGlyph(g)).filter(Boolean);
+    return { text, rects };
+  }
+
+  if (typeof window !== 'undefined') {
+    /** 標記區「原始文字」：與框選朗讀相同字元排序（直書右→左欄、欄內上→下） */
+    window.pdfViewerExtractTextForMarkRect = (pageNum, frameRect) => {
+      const fr = {
+        left: frameRect.left,
+        top: frameRect.top,
+        right: frameRect.right,
+        bottom: frameRect.bottom,
+      };
+      const deduped = collectGlyphsIntersectingClientRect(fr, {
+        pageNumber: pageNum,
+        minOverlapRatio: 0.45,
+      });
+      let out = deduped.map(g => g.ch).join('');
+      out = collapseAdjacentDuplicateCjkRuns(out);
+      return out.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    };
   }
 
   function handleStart(e) {
@@ -799,12 +1840,15 @@
         ? document.querySelector(`.page[data-page-number="${r.pageNumber}"] .textLayer`)
         : null;
       if (textLayerEl) {
+        el.style.boxSizing = 'border-box';
         el.style.left = `${(r.relLeft || 0) * 100}%`;
         el.style.top = `${(r.relTop || 0) * 100}%`;
-        el.style.width = `${Math.max(0.1, (r.relWidth || 0) * 100)}%`;
-        el.style.height = `${Math.max(0.1, (r.relHeight || 0) * 100)}%`;
+        const hp = highlightPercentDims(r.relWidth, r.relHeight);
+        el.style.width = `${hp.w}%`;
+        el.style.height = `${hp.h}%`;
         textLayerEl.insertBefore(el, textLayerEl.firstChild);
       } else {
+        el.style.boxSizing = 'border-box';
         el.style.left = `${r.left}px`;
         el.style.top = `${r.top}px`;
         el.style.width = `${Math.max(1, r.width)}px`;
@@ -906,7 +1950,10 @@
           const range = document.createRange();
           range.setStart(textNode, i);
           range.setEnd(textNode, i + 1);
-          const rect = range.getBoundingClientRect();
+          const picked = pickGlyphRectsFromRange(range, txt[i], el);
+          const rawRect = picked[0];
+          if (!rawRect || rawRect.width <= 0 || rawRect.height <= 0) continue;
+          const rect = refineGlyphRectWithSpan(el, rawRect, i, txt.length, txt[i]);
           if (!rect || rect.width <= 0 || rect.height <= 0) continue;
 
           glyphs.push({
@@ -915,16 +1962,16 @@
             y: rect.top,
             w: rect.width,
             h: rect.height,
+            pageNumber,
+            spanIsVertical: spanLooksVerticallyTypeset(el),
           });
         }
       }
     }
 
-    // 依閱讀順序排序
-    glyphs.sort((a, b) => {
-      const dy = a.y - b.y;
-      if (Math.abs(dy) > 2) return dy;
-      return a.x - b.x;
+    sortSinglePageGlyphChunk(glyphs, g => g, {
+      pageNumber,
+      workSpansForHint: Array.from(pageLayer.querySelectorAll('span')),
     });
 
     // 粗體/陰影重疊去重：同字元且位置接近(容差 3px)只留一個
@@ -951,16 +1998,22 @@
     const textLayerEl = document.querySelector(`.page[data-page-number="${g.pageNumber}"] .textLayer`);
     const layerRect = textLayerEl?.getBoundingClientRect();
     if (!textLayerEl || !layerRect) return null;
+    const rel = clientRectToTextLayerPercentages(textLayerEl, {
+      left: g.x,
+      top: g.y,
+      width: g.w,
+      height: g.h,
+    });
     return {
       pageNumber: g.pageNumber,
       left: g.x,
       top: g.y,
       width: g.w,
       height: g.h,
-      relLeft: (g.x - layerRect.left) / (layerRect.width || 1),
-      relTop: (g.y - layerRect.top) / (layerRect.height || 1),
-      relWidth: g.w / (layerRect.width || 1),
-      relHeight: g.h / (layerRect.height || 1),
+      relLeft: rel.relLeft,
+      relTop: rel.relTop,
+      relWidth: rel.relWidth,
+      relHeight: rel.relHeight,
     };
   }
 
@@ -1218,12 +2271,15 @@
         ? document.querySelector(`.page[data-page-number="${r.pageNumber}"] .textLayer`)
         : null;
       if (textLayerEl) {
+        el.style.boxSizing = 'border-box';
         el.style.left = `${(r.relLeft || 0) * 100}%`;
         el.style.top = `${(r.relTop || 0) * 100}%`;
-        el.style.width = `${Math.max(0.1, (r.relWidth || 0) * 100)}%`;
-        el.style.height = `${Math.max(0.1, (r.relHeight || 0) * 100)}%`;
+        const hp = highlightPercentDims(r.relWidth, r.relHeight);
+        el.style.width = `${hp.w}%`;
+        el.style.height = `${hp.h}%`;
         textLayerEl.insertBefore(el, textLayerEl.firstChild);
       } else {
+        el.style.boxSizing = 'border-box';
         el.style.left = `${r.left}px`;
         el.style.top = `${r.top}px`;
         el.style.width = `${Math.max(1, r.width)}px`;
@@ -1270,37 +2326,58 @@
     const bar = document.getElementById('ttsPlaybackBar');
     const voiceSelect = document.getElementById('voiceSelect');
     const speedWrap = document.getElementById('readingSpeedWrap');
+    const audio = document.getElementById('readingAudioPlayer');
     if (!bar || !voiceSelect || !speedWrap) return;
 
-    const GAP_BAR_VOICE = 10; // 維持原本 bar 與發音選單間距
-    const GAP_VOICE_SPEED = 24; // 視覺上接近目前配置
-    const VOICE_SHIFT_X = 20; // 發音選單微調向右
-    const TOP = 70;
-    const PAD = 8;
+    const PAD_X = 12;
+    const PAD_BOTTOM = 12;
+    const TOP_VOICE = 70;
+    const GAP = 12;
 
+    // 語言／語音選單：右上角
+    voiceSelect.style.top = `${TOP_VOICE}px`;
+    voiceSelect.style.right = `${PAD_X}px`;
+    voiceSelect.style.left = 'auto';
+    voiceSelect.style.bottom = 'auto';
+
+    // 底部置中：播放列 + 語速滑軌 +（若有）audio player
     const bw = bar.offsetWidth || 250;
-    const vw = voiceSelect.offsetWidth || 300;
     const sw = speedWrap.offsetWidth || 260;
-    const groupW = bw + GAP_BAR_VOICE + vw + GAP_VOICE_SPEED + sw;
+    let aw = 0;
+    if (audio && audio.isConnected) {
+      const rw = audio.getBoundingClientRect().width;
+      aw = rw >= 8 ? rw : 280;
+    }
+    const totalW = bw + GAP + sw + (aw ? GAP + aw : 0);
+    let groupLeft = Math.round((window.innerWidth - totalW) / 2);
+    groupLeft = Math.max(PAD_X, Math.min(groupLeft, window.innerWidth - PAD_X - totalW));
 
-    let groupLeft = Math.round((window.innerWidth - groupW) / 2);
-    groupLeft = Math.max(PAD, Math.min(groupLeft, Math.max(PAD, window.innerWidth - PAD - groupW)));
-
-    const barLeft = groupLeft;
-    const voiceLeft = barLeft + bw + GAP_BAR_VOICE + VOICE_SHIFT_X;
-    const speedLeft = voiceLeft + vw + GAP_VOICE_SPEED;
-
-    bar.style.top = `${TOP}px`;
-    bar.style.left = `${Math.round(barLeft)}px`;
+    bar.style.bottom = `${PAD_BOTTOM}px`;
+    bar.style.top = 'auto';
+    bar.style.left = `${groupLeft}px`;
     bar.style.right = 'auto';
 
-    voiceSelect.style.top = `${TOP}px`;
-    voiceSelect.style.left = `${Math.round(voiceLeft)}px`;
-    voiceSelect.style.right = 'auto';
-
-    speedWrap.style.top = `${TOP}px`;
-    speedWrap.style.left = `${Math.round(speedLeft)}px`;
+    const speedLeft = groupLeft + bw + GAP;
+    speedWrap.style.bottom = `${PAD_BOTTOM}px`;
+    speedWrap.style.top = 'auto';
+    speedWrap.style.left = `${speedLeft}px`;
     speedWrap.style.right = 'auto';
+
+    if (audio) {
+      const audioLeft = speedLeft + sw + GAP;
+      audio.style.position = 'fixed';
+      audio.style.bottom = `${PAD_BOTTOM}px`;
+      audio.style.top = 'auto';
+      audio.style.left = `${audioLeft}px`;
+      audio.style.right = 'auto';
+      audio.style.transform = 'none';
+      audio.style.zIndex = '3100';
+      audio.style.maxWidth = `${Math.min(360, Math.round(window.innerWidth * 0.42))}px`;
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.layoutTtsPlaybackBar = layoutTtsPlaybackBar;
   }
 
   function ensureTtsPlaybackBar() {
@@ -1308,6 +2385,8 @@
     const bar = document.createElement('div');
     bar.id = 'ttsPlaybackBar';
     bar.style.position = 'fixed';
+    bar.style.bottom = '12px';
+    bar.style.top = 'auto';
     bar.style.zIndex = '3100';
     bar.style.display = 'flex';
     bar.style.alignItems = 'center';
@@ -1409,32 +2488,74 @@
     }
   }
 
+  /** PDF 載入／文字層重繪後掃描各頁，預先填入 getPageReadingLayoutMeta（直／橫／混合）。 */
+  function prefetchReadingLayoutForAllPages() {
+    const app = window.PDFViewerApplication;
+    const n = app?.pdfDocument?.numPages;
+    if (!n || !Number.isFinite(n)) return;
+    for (let p = 1; p <= n; p++) {
+      const tl = document.querySelector(`.page[data-page-number="${p}"] .textLayer`);
+      if (tl && tl.querySelector('span')) {
+        getPageReadingLayoutMeta(p);
+      }
+    }
+  }
+
+  let _readingLayoutPrefetchTid = 0;
+  function schedulePrefetchReadingLayoutDebounced() {
+    clearTimeout(_readingLayoutPrefetchTid);
+    _readingLayoutPrefetchTid = setTimeout(() => {
+      prefetchReadingLayoutForAllPages();
+      _readingLayoutPrefetchTid = 0;
+    }, 180);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.pdfViewerGetPageReadingLayout = pageNum => {
+      const m = getPageReadingLayoutMeta(pageNum);
+      return { ...m };
+    };
+    window.pdfViewerPrefetchReadingLayouts = prefetchReadingLayoutForAllPages;
+  }
+
   function bindModelRepaintEvents() {
     const app = window.PDFViewerApplication;
     const eb = app?.eventBus;
     if (!eb || bindModelRepaintEvents._bound) return false;
     bindModelRepaintEvents._bound = true;
     const rerender = () => rebuildReadHighlightsFromModel();
-    eb._on('pagerendered', rerender);
-    eb._on('scalechanging', rerender);
-    eb._on('rotationchanging', rerender);
+    const runPrefetch = () => schedulePrefetchReadingLayoutDebounced();
+    eb._on('pagesloaded', runPrefetch);
+    eb._on('textlayerrendered', runPrefetch);
+    eb._on('pagerendered', (e) => {
+      clearVerticalReadingModeCacheForPage(e?.pageNumber);
+      rerender();
+    });
+    eb._on('scalechanging', () => {
+      clearVerticalReadingModeCacheForPage('');
+      rerender();
+    });
+    eb._on('rotationchanging', () => {
+      clearVerticalReadingModeCacheForPage('');
+      rerender();
+    });
     eb._on('updateviewarea', rerender);
+    schedulePrefetchReadingLayoutDebounced();
     return true;
   }
 
   function sortGlyphsByReadingOrder(glyphList) {
-    const arr = [...glyphList];
-    arr.sort((a, b) => {
-      const ay = a.rects?.[0]?.top ?? a.y ?? 0;
-      const by = b.rects?.[0]?.top ?? b.y ?? 0;
-      const ax = a.rects?.[0]?.left ?? a.x ?? 0;
-      const bx = b.rects?.[0]?.left ?? b.x ?? 0;
-      const dy = ay - by;
-      // 同一行容差：3px
-      if (Math.abs(dy) > 3) return dy;
-      return ax - bx;
-    });
-    return arr;
+    if (!glyphList.length) return glyphList;
+    return sortGlyphLikeListByReadingOrder(
+      glyphList,
+      g => ({
+        x: g.rects?.[0]?.left ?? g.x ?? 0,
+        y: g.rects?.[0]?.top ?? g.y ?? 0,
+        w: g.rects?.[0]?.width ?? g.w ?? 0,
+        h: g.rects?.[0]?.height ?? g.h ?? 0,
+      }),
+      { useSubsetVerticalInference: true }
+    );
   }
 
   function glyphIntersectsClientFrame(g, frame) {
@@ -1466,16 +2587,22 @@
     const it = Math.max(frameRect.top, layerRect.top);
     const ib = Math.min(frameRect.bottom, layerRect.bottom);
     if (ir <= il || ib <= it) return null;
+    const rel = clientRectToTextLayerPercentages(textLayerEl, {
+      left: il,
+      top: it,
+      width: ir - il,
+      height: ib - it,
+    });
     return {
       pageNumber,
       left: il,
       top: it,
       width: ir - il,
       height: ib - it,
-      relLeft: (il - layerRect.left) / (layerRect.width || 1),
-      relTop: (it - layerRect.top) / (layerRect.height || 1),
-      relWidth: (ir - il) / (layerRect.width || 1),
-      relHeight: (ib - it) / (layerRect.height || 1),
+      relLeft: rel.relLeft,
+      relTop: rel.relTop,
+      relWidth: rel.relWidth,
+      relHeight: rel.relHeight,
     };
   }
 
@@ -2294,9 +3421,33 @@
   }
 
   /**
-   * 阿拉伯數字外包圍（①、➀、⑴、⓪…）：還原成半形數字；㊀、㈠ 等還原成一、二…十。
-   * 凡屬「去外圈／括號」還原出的數字或中文數字，前後加短停頓（全形逗號「，」）以利 TTS。
-   * 須先替換再 NFKC：否則 NFKC 會把 ①→1、㊀→一，永遠偵測不到帶圈碼位而無法加停頓。
+   * 粗體／疊層 PDF 文字常造成相鄰重複（如「標題標題」、HelloHello）；送 TTS 前收斂。
+   * 與框選字元收集用的 CJK 規則一致，並加強英文單字、數字段的重複相接。
+   */
+  function collapseAdjacentDuplicateRunsForTts(s) {
+    if (!s || s.length < 2) return s;
+    let t = s;
+    let prev = '';
+    let guard = 0;
+    const cjkSpan = String.raw`(?:[\u3000-\u9fff\u2460-\u2473])`;
+    while (prev !== t && guard++ < 24) {
+      prev = t;
+      t = t.replace(new RegExp(`(${cjkSpan}{2,}?)(?:\\1)+`, 'gu'), '$1');
+      t = t.replace(new RegExp(`(${cjkSpan})(?:\\1)+`, 'gu'), '$1');
+    }
+    prev = '';
+    guard = 0;
+    while (prev !== t && guard++ < 16) {
+      prev = t;
+      t = t.replace(/([A-Za-z]{3,})(?:\1)+/g, '$1');
+      t = t.replace(/([0-9０-９]{2,})(?:\1)+/g, '$1');
+    }
+    return t;
+  }
+
+  /**
+   * 各類帶圈／括號選項碼（①、➊、⓵、⑴、❶、㈠、㊀、⒈…）皆還原為半形數字，TTS 前後加「，」停頓。
+   * 須先替換再 NFKC：否則 NFKC 會先把部分符號打散，不利偵測。
    * 「○」+ 數字（PDF 拆字）同樣在 NFKC 之前處理。
    */
   function normalizeCircledDigitsForTts(s) {
@@ -2323,13 +3474,6 @@
       }
     }
 
-    function swapToLiteral(codePoint, literal) {
-      const ch = String.fromCodePoint(codePoint);
-      if (out.includes(ch)) {
-        out = out.split(ch).join(ttsPauseAround(literal));
-      }
-    }
-
     // Enclosed alphanumerics：①–⑳、⓪、⓿、⑪–⑳（負圈）
     swapRange(0x2460, 20, 1);
     swapOne(0x24ea, 0);
@@ -2352,19 +3496,108 @@
     swapRange(0x2780, 10, 1);
     swapRange(0x278a, 10, 1);
 
-    // ㈠–㈩、㊀–㊉：Unicode 語意為「括號／圓圈」包中文數字，僅還原為一、二…十
-    const cjkNumZh = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-    for (let i = 0; i < 10; i++) {
-      swapToLiteral(0x3220 + i, cjkNumZh[i]);
-      swapToLiteral(0x3280 + i, cjkNumZh[i]);
+    // ㈠–㈩、㊀–㊉：與 ① 相同，半形 1–10，TTS 為 ，1，
+    swapRange(0x3220, 9, 1);
+    swapOne(0x3229, 10);
+    swapRange(0x3280, 9, 1);
+    swapOne(0x3289, 10);
+
+    // ⒈–⒚（數字+句點）
+    swapRange(0x2488, 9, 1);
+    swapOne(0x2491, 10);
+    swapRange(0x2492, 10, 11);
+
+    swapOne(0x1f10b, 0);
+    swapOne(0x1f10c, 0);
+    swapOne(0x1f101, 0);
+    swapRange(0x1f102, 9, 1);
+
+    function parseParensChineseNumeral(inner) {
+      const d = {
+        〇: 0,
+        零: 0,
+        一: 1,
+        二: 2,
+        三: 3,
+        四: 4,
+        五: 5,
+        六: 6,
+        七: 7,
+        八: 8,
+        九: 9,
+      };
+      if (!inner) return null;
+      if (inner === '十') return 10;
+      if (inner.length === 1 && d[inner] !== undefined) return d[inner];
+      if (inner.length === 2 && inner[0] === '十' && d[inner[1]] !== undefined) return 10 + d[inner[1]];
+      if (inner.length === 2 && inner[1] === '十' && d[inner[0]] !== undefined && d[inner[0]] > 0)
+        return d[inner[0]] * 10;
+      if (
+        inner.length === 3 &&
+        inner[1] === '十' &&
+        d[inner[0]] !== undefined &&
+        d[inner[2]] !== undefined
+      )
+        return d[inner[0]] * 10 + d[inner[2]];
+      return null;
     }
 
-    // 「○ / 白圓」+ 半形或全形數字（PDF 拆字後常見）
-    out = out.replace(/○\s*([0-9０-９])/g, (_, d) => {
-      const n = fw.indexOf(d);
-      const num = n >= 0 ? n : parseInt(d, 10);
-      return Number.isFinite(num) ? ttsPauseAround(String(num)) : d;
-    });
+    function replaceParenthesizedNumerals(str) {
+      let t = str;
+      t = t.replace(/[（(]\s*([〇零一二三四五六七八九十]{1,3})\s*[）)]/gu, (m, inner) => {
+        const n = parseParensChineseNumeral(inner.replace(/\s/g, ''));
+        return n != null ? ttsPauseAround(String(n)) : m;
+      });
+      t = t.replace(/[（(]\s*([0-9０-９]{1,2})\s*[）)]/gu, (m, numStr) => {
+        const trimmed = numStr.replace(/\s/g, '');
+        let ds = '';
+        for (const ch of trimmed) {
+          const idx = fw.indexOf(ch);
+          if (idx >= 0) ds += String(idx);
+          else if (ch >= '0' && ch <= '9') ds += ch;
+          else return m;
+        }
+        const n = parseInt(ds, 10);
+        if (!Number.isFinite(n) || n < 0 || n > 99) return m;
+        return ttsPauseAround(String(n));
+      });
+      return t;
+    }
+
+    out = replaceParenthesizedNumerals(out);
+
+    /** 半形／全形數字 → 半形數字字串；無法解析則 null */
+    function digitCharToNumStr(d) {
+      const idx = fw.indexOf(d);
+      if (idx >= 0) return String(idx);
+      const v = parseInt(d, 10);
+      return Number.isFinite(v) ? String(v) : null;
+    }
+
+    // 白圓／空心圓等（含 U+25CB、U+3007 〇、●）；全形空格等置於圓與數字之間時亦須配對
+    const circleLike = '[\u25CB\u3007\u25EF\u25E6\u25CF\u25CC]';
+    const betweenDigitCircle =
+      '[\\s\\u00a0\\u3000\\u2000-\\u200d\\u202f\\u205f\\ufeff，,、．.·\u00b7•\u2022]*';
+
+    function replaceCircleDigitPairs(str) {
+      const digitClass = '[\\d\\uFF10-\\uFF19]';
+      let t = str;
+      t = t.replace(new RegExp(`${circleLike}${betweenDigitCircle}(${digitClass})`, 'gu'), (_, d) => {
+        const ns = digitCharToNumStr(d);
+        return ns != null ? ttsPauseAround(ns) : _;
+      });
+      t = t.replace(new RegExp(`(${digitClass})${betweenDigitCircle}${circleLike}`, 'gu'), (_, d) => {
+        const ns = digitCharToNumStr(d);
+        return ns != null ? ttsPauseAround(ns) : _;
+      });
+      return t;
+    }
+
+    // 先去掉零寬字元，避免「2」與「○」視覺相鄰但字串不相鄰
+    out = out.replace(/[\u200b-\u200d\ufeff]/g, '');
+
+    // NFKC 前先處理拆字組合（避免 ② 等先被 NFKC 打成半形數字後無法套帶圈規則）
+    out = replaceCircleDigitPairs(out);
 
     try {
       out = out.normalize('NFKC');
@@ -2372,13 +3605,48 @@
       /* ignore */
     }
 
+    // NFKC 後再掃一次：殘留的「2○」「〇3」等（區塊切分／排序後仍可能出現）
+    out = replaceCircleDigitPairs(out);
+
+    out = replaceParenthesizedNumerals(out);
+
     out = out.replace(/，{2,}/g, '，');
 
     return out;
   }
 
+  /** 與 index2：先 TTS 正規化再套試算表（key 用 ① 或 TTS 後的 ，1， 皆可） */
+  function applySheetReplacementsForReading(sourceText, data) {
+    let out = normalizeCircledDigitsForTts(sourceText || '');
+    if (!data?.table?.rows) return out;
+    const fwDigits = '０１２３４５６７８９';
+    data.table.rows.forEach((row, index) => {
+      const original = cellToString(row.c?.[0]);
+      const replacement = cellToString(row.c?.[1]);
+      if (!original || !replacement) return;
+      const origTrim = original.trim();
+      const replTts = normalizeCircledDigitsForTts(replacement.trim());
+      const keyTts = normalizeCircledDigitsForTts(origTrim);
+      const isBareDigit =
+        /^[0-9]$/.test(origTrim) || (origTrim.length === 1 && fwDigits.includes(origTrim));
+      let replaced = false;
+      if (!isBareDigit && keyTts && out.includes(keyTts)) {
+        out = out.split(keyTts).join(replTts);
+        replaced = true;
+      } else if (!isBareDigit && origTrim && out.includes(origTrim)) {
+        out = out.split(origTrim).join(replTts);
+        replaced = true;
+      }
+      if (replaced) {
+        console.log(`試算表替換（朗讀）第 ${index + 2} 行: "${original}" -> "${replacement}"`);
+      }
+    });
+    return out;
+  }
+
   if (typeof window !== 'undefined') {
     window.normalizeCircledDigitsForTts = normalizeCircledDigitsForTts;
+    window.collapseAdjacentDuplicateRunsForTts = collapseAdjacentDuplicateRunsForTts;
   }
 
   window.sendTextToTTS = async function (selectedText, callback, options) {
@@ -2415,13 +3683,15 @@
       return;
     }
 
-    cleanedText = normalizeCircledDigitsForTts(cleanedText);
+    cleanedText = collapseAdjacentDuplicateRunsForTts(cleanedText);
 
-    let filteredText = cleanedText;
+    let filteredText;
     const sheetId = getSheetIdFromUrl();
     if (sheetId) {
       const data = await fetchSheetDataCached(sheetId);
-      filteredText = replaceTextWithSheetData(cleanedText, data);
+      filteredText = applySheetReplacementsForReading(cleanedText, data);
+    } else {
+      filteredText = normalizeCircledDigitsForTts(cleanedText);
     }
 
     console.log('送出給 TTS 的文本:', filteredText);
@@ -2480,11 +3750,20 @@
       if (!audio) {
         audio = document.createElement('audio');
         audio.id = 'readingAudioPlayer';
+        audio.controls = true;
         audio.style.position = 'fixed';
-        audio.style.left = '50%';
-        audio.style.bottom = '8px';
-        audio.style.transform = 'translateX(-50%)';
+        audio.style.zIndex = '3100';
         document.body.appendChild(audio);
+      }
+      audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          if (typeof window.layoutTtsPlaybackBar === 'function') window.layoutTtsPlaybackBar();
+        },
+        { once: true }
+      );
+      if (typeof window.layoutTtsPlaybackBar === 'function') {
+        window.layoutTtsPlaybackBar();
       }
       audio.src = audioUrl;
       audio.onplay = () => window.setTtsPlaybackState?.('playing');
@@ -2696,6 +3975,24 @@ window.addEventListener('load', () => {
       });
     };
 
+    /** 載入失敗時須關閉遮罩，否則錯誤訊息被蓋住且看似永遠轉圈 */
+    const tryBindDocumentErrorToHideCover = () => {
+      if (initialCover.dataset.pdfjsDocErrorBound === '1') return;
+      const ebErr = window.PDFViewerApplication?.eventBus;
+      if (!ebErr || typeof ebErr._on !== 'function') {
+        setTimeout(tryBindDocumentErrorToHideCover, 50);
+        return;
+      }
+      initialCover.dataset.pdfjsDocErrorBound = '1';
+      ebErr._on('documenterror', () => {
+        try {
+          initialCover.dataset.pdfjsCoverBound = '1';
+          scheduleHideCover();
+        } catch (_) {}
+      });
+    };
+    tryBindDocumentErrorToHideCover();
+
     const coverBindT0 = Date.now();
     let hasFileParam = false;
     try {
@@ -2711,8 +4008,8 @@ window.addEventListener('load', () => {
         initialCover.dataset.pdfjsCoverBound = '1';
         scheduleHideCover();
       }, COVER_NO_FILE_PARAM_HIDE_MS);
-      return;
-    }
+      // 不可在此 return：會略過 load 回呼後段的 resetReadingFrameDefault，導致 #readingFrame 永遠 display:none
+    } else {
     const bindInitialCoverWhenReady = () => {
       if (initialCover.dataset.pdfjsCoverBound === '1') {
         return;
@@ -2808,12 +4105,65 @@ window.addEventListener('load', () => {
         }, 880);
         tryRevealCover();
       });
+
+      // IndexedDB／小檔本機開啟時，PDF 常在 window.load 之前就載入並 dispatch 完 pagesloaded、pagerendered；
+      // 此時才在 load 裡註冊的 _on 會全部錯過 → 畫面永遠「載入 PDF」但主控台已顯示 PDF 已開啟。
+      const PDF_PAGE_RENDER_FINISHED = 3; // 等同 viewer 內 RenderingStates.FINISHED
+      const bootstrapCoverIfViewerAlreadyRendered = () => {
+        if (hidden) return;
+        syncPagesLoaded();
+        try {
+          const a = window.PDFViewerApplication;
+          const pv = a?.pdfViewer;
+          if (!a?.pdfDocument || !pv) return;
+          const pn = Math.max(1, pv.currentPageNumber || 1);
+          const pageView = typeof pv.getPageView === 'function' ? pv.getPageView(pn - 1) : null;
+          const finished = pageView?.renderingState === PDF_PAGE_RENDER_FINISHED;
+          const wrap = pageView?.div;
+          const canvas = wrap?.querySelector?.('canvas');
+          const canvasOk = !!(canvas && canvas.width >= 2 && canvas.height >= 2);
+          if (finished && canvasOk) {
+            if (!coverWait.firstCanvasAt) {
+              coverWait.firstCanvasAt = Date.now();
+            }
+            coverWait.textLayerOk = true;
+            tryRevealCover();
+          }
+        } catch (_) {}
+      };
+      [0, 50, 120, 300, 700, 1600, 3200].forEach(ms => {
+        setTimeout(bootstrapCoverIfViewerAlreadyRendered, ms);
+      });
+      requestAnimationFrame(() => {
+        requestAnimationFrame(bootstrapCoverIfViewerAlreadyRendered);
+      });
+
+      const COVER_STUCK_FORCE_MS = 5500;
+      setTimeout(() => {
+        if (hidden || !initialCover?.isConnected) return;
+        bootstrapCoverIfViewerAlreadyRendered();
+        if (hidden) return;
+        try {
+          if (!window.PDFViewerApplication?.pdfDocument) return;
+          const vc = document.getElementById('viewerContainer');
+          const anyCanvas = vc?.querySelector?.('.page canvas');
+          if (anyCanvas && anyCanvas.width >= 2) {
+            coverWait.pagesLoaded = true;
+            if (!coverWait.firstCanvasAt) {
+              coverWait.firstCanvasAt = Date.now();
+            }
+            coverWait.textLayerOk = true;
+            tryRevealCover();
+          }
+        } catch (_) {}
+      }, COVER_STUCK_FORCE_MS);
     };
 
     bindInitialCoverWhenReady();
 
     if (app?.pdfDocument) {
       requestAnimationFrame(() => kickPdfViewerVisibleRefresh());
+    }
     }
   }
   // 延後一點點時間，確保工具列與按鈕尺寸已經穩定，再套用與觸控朗讀相同的預設位置與大小
