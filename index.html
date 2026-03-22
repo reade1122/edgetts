@@ -2174,31 +2174,19 @@ if (typeof window !== 'undefined') {
     window.collapseAdjacentDuplicateRunsForTts = collapseAdjacentDuplicateRunsForTts;
 }
 
-// 將 sendTextToTTS 定義在全局作用域，以便其他函數可以訪問
-async function sendTextToTTS(selectedText, callback, options = {}) {
-    const canPlay = typeof options.canPlay === 'function' ? options.canPlay : (() => true);
-    const safeCallback = () => {
-        if (typeof callback === 'function') callback();
-    };
-    if (!canPlay()) {
-        safeCallback();
-        return;
-    }
-    // 每次新的發音請求，一開始先「徹底清除」之前的所有發音狀態
+// 雲端 TTS 為非同步 fetch：新操作（例如改為圖片辨識）必須讓「尚未回傳的舊請求」作廢，否則舊音檔會在辨識過程中突然播放。
+let ttsRequestGeneration = 0;
+
+function resetAudioPlayerAndInvalidatePendingTts() {
+    ttsRequestGeneration++;
     try {
-        // 1. 停止並清空瀏覽器本機語音佇列
         if (window.speechSynthesis) {
             window.speechSynthesis.cancel();
         }
-
-        // 2. 停止並重設自訂音頻播放器
         const audioPlayerEl = document.getElementById('audioPlayer');
         if (audioPlayerEl) {
-            // 停止目前播放
             audioPlayerEl.pause();
             audioPlayerEl.currentTime = 0;
-
-            // 清除事件監聽與來源，避免舊的 oncanplay / onended 在背景觸發
             audioPlayerEl.oncanplay = null;
             audioPlayerEl.onended = null;
             audioPlayerEl.onerror = null;
@@ -2208,8 +2196,6 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
             audioPlayerEl.onabort = null;
             audioPlayerEl.onstalled = null;
             audioPlayerEl.onsuspend = null;
-
-            // 清空來源並強制重新載入，以切斷舊音檔
             audioPlayerEl.removeAttribute('src');
             try {
                 audioPlayerEl.load();
@@ -2220,6 +2206,20 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
     } catch (e) {
         console.error('重置發音狀態時發生錯誤：', e);
     }
+}
+
+// 將 sendTextToTTS 定義在全局作用域，以便其他函數可以訪問
+async function sendTextToTTS(selectedText, callback, options = {}) {
+    const canPlay = typeof options.canPlay === 'function' ? options.canPlay : (() => true);
+    const safeCallback = () => {
+        if (typeof callback === 'function') callback();
+    };
+    if (!canPlay()) {
+        safeCallback();
+        return;
+    }
+    resetAudioPlayerAndInvalidatePendingTts();
+    const myTtsGeneration = ttsRequestGeneration;
 
     // 加強文字清理，移除可能導致 SSML 解析錯誤的特殊字符
     let cleanedText = (selectedText || '')
@@ -2257,6 +2257,10 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
         safeCallback();
         return;
     }
+
+    if (myTtsGeneration !== ttsRequestGeneration) {
+        return;
+    }
     
     // 獲取選擇的聲音和語速
     const voiceName = document.getElementById("voiceSelect").value;
@@ -2268,6 +2272,9 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
         const langPrefix = voiceName === 'local-zh-female' ? 'zh' : 'en';
         if (!canPlay()) {
             safeCallback();
+            return;
+        }
+        if (myTtsGeneration !== ttsRequestGeneration) {
             return;
         }
         speakWithLocalTTS(filteredText, rateValue, langPrefix, safeCallback);
@@ -2301,6 +2308,9 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
         return response.json();
     })
     .then(data => {
+        if (myTtsGeneration !== ttsRequestGeneration) {
+            return;
+        }
         if (!canPlay()) {
             safeCallback();
             return;
@@ -2334,12 +2344,19 @@ async function sendTextToTTS(selectedText, callback, options = {}) {
                     clearTimeout(loadTimeout);
                     loadTimeout = null;
                 }
-                if (callback) callback();
+                if (myTtsGeneration === ttsRequestGeneration && callback) callback();
             }, 10000); // 10秒超時
             
             // 添加載入事件（只設置一次）
             audioPlayer.onloadstart = () => console.log('開始載入音頻...');
             audioPlayer.oncanplay = () => {
+                if (myTtsGeneration !== ttsRequestGeneration) {
+                    if (loadTimeout) {
+                        clearTimeout(loadTimeout);
+                        loadTimeout = null;
+                    }
+                    return;
+                }
                 if (!canPlay()) {
                     audioPlayer.pause();
                     audioPlayer.removeAttribute('src');
@@ -2899,18 +2916,9 @@ async function readTextInsideFrame() {
     // 清除標記替換緩存
     clearMarkReplacementCache();
     
-    // 每次框選朗讀前，先清除之前的朗讀標示與發音狀態
+    // 每次框選朗讀前：作廢尚未完成的雲端 TTS、徹底重置 audioPlayer（避免圖片辨識等待期間播放上一段音檔）
     try {
-        // 停止瀏覽器語音
-        if (window.speechSynthesis) {
-            window.speechSynthesis.cancel();
-        }
-        // 停止自訂播放器
-        const audioPlayer = document.getElementById('audioPlayer');
-        if (audioPlayer) {
-            audioPlayer.pause();
-            audioPlayer.currentTime = 0;
-        }
+        resetAudioPlayerAndInvalidatePendingTts();
         // 清掉所有 my-fra 上的背景色與 spoken 標記
         const allFraSpans = document.querySelectorAll('#viewerContainer .textLayer my-fra');
         allFraSpans.forEach(span => {
@@ -5607,7 +5615,7 @@ function startMarking(e) {
     console.log('開始標記，位置:', startX, startY, '頁碼:', currentPage, '事件目標:', e.target);
     
     currentMark = {
-        id: markIdCounter++,
+        id: markIdCounter,
         startX,
         startY,
         x: startX,
@@ -5705,6 +5713,7 @@ function finishMark(e) {
             writeMarkAnchorNormFromPixels(newMark, mlFinish);
         }
         marks[currentMark.pageNum].push(newMark);
+        markIdCounter++;
         
         // 保存標記ID和頁碼、此區塊 DOM，避免閉包問題（多區塊時每個區塊各自綁定）
         const markId = currentMark.id;
@@ -6166,13 +6175,47 @@ function finishMark(e) {
         injectPdfMarkAnchorsInTextLayer(markPageNum);
         
     } else {
-        // 標記太小，移除
-        if (markBlockElement) {
-            markBlockElement.remove();
+        // 標記太小或僅點擊未拖曳：必須用 currentMark.element（markBlockElement 僅在上分支宣告，此處會 ReferenceError）
+        const previewEl = currentMark.element;
+        if (previewEl && previewEl.parentNode) {
+            previewEl.remove();
         }
     }
     
     currentMark = null;
+}
+
+/** 取得標記區域裁切圖與 base64，供圖片辨識／標記朗讀使用（與 readMarkBlock 邏輯一致） */
+function getMarkRegionVisionData(markId, pageNum) {
+    const mark = marks[pageNum]?.find(m => m.id === markId);
+    if (!mark) {
+        return { croppedCanvas: null, base64Image: null, hasImageContent: false };
+    }
+    const markLayer = document.querySelector(`.mark-layer[data-page-num="${pageNum}"]`);
+    if (!markLayer) {
+        return { croppedCanvas: null, base64Image: null, hasImageContent: false };
+    }
+    ensureMarkAnchorSynced(mark, markLayer);
+    let base64Image = null;
+    let croppedCanvas = null;
+    const viewerContainer = document.getElementById('viewerContainer');
+    const pdfCanvas = viewerContainer && viewerContainer.querySelector('canvas');
+    if (pdfCanvas) {
+        const markBlockElement = markLayer.querySelector(`[data-mark-id="${markId}"]`);
+        if (markBlockElement) {
+            const markBlockRect = markBlockElement.getBoundingClientRect();
+            croppedCanvas = cropCanvas(pdfCanvas, markBlockRect);
+            base64Image = canvasToBase64(croppedCanvas);
+        }
+    }
+    let hasImageContent = false;
+    if (croppedCanvas) {
+        const isCanvasAllWhiteFunc = window.isCanvasAllWhite || isCanvasAllWhite;
+        if (typeof isCanvasAllWhiteFunc === 'function' && !isCanvasAllWhiteFunc(croppedCanvas)) {
+            hasImageContent = true;
+        }
+    }
+    return { croppedCanvas, base64Image, hasImageContent };
 }
 
 // 朗讀標記區塊
@@ -6255,29 +6298,7 @@ async function readMarkBlock(markId, pageNum) {
         cleanedText = text.trim().replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     }
     
-    // 取得圖片 base64（與框選朗讀一致）
-    let base64Image = null;
-    let croppedCanvas = null;
-    const viewerContainer = document.getElementById('viewerContainer');
-    const pdfCanvas = viewerContainer.querySelector('canvas');
-    if (pdfCanvas) {
-        // 計算標記在畫布中的實際位置（使用 getBoundingClientRect，與框選朗讀一致）
-        const markBlockElement = markLayer.querySelector(`[data-mark-id="${markId}"]`);
-        if (markBlockElement) {
-            const markBlockRect = markBlockElement.getBoundingClientRect();
-            croppedCanvas = cropCanvas(pdfCanvas, markBlockRect);
-            base64Image = canvasToBase64(croppedCanvas);
-        }
-    }
-    
-    // 判斷是否有圖片內容（與框選朗讀一致）
-    let hasImageContent = false;
-    if (croppedCanvas) {
-        const isCanvasAllWhiteFunc = window.isCanvasAllWhite || isCanvasAllWhite;
-        if (typeof isCanvasAllWhiteFunc === 'function' && !isCanvasAllWhiteFunc(croppedCanvas)) {
-            hasImageContent = true;
-        }
-    }
+    const { base64Image, hasImageContent } = getMarkRegionVisionData(markId, pageNum);
     
     // 判斷內容（與框選朗讀一致）
     if (!hasImageContent && cleanedText.length === 0) {
@@ -6298,8 +6319,11 @@ async function readMarkBlock(markId, pageNum) {
         if (mark.replacementText && mark.replacementText.trim()) {
             text = mark.replacementText.trim();
             // 使用替換文字，跳過圖片辨識，直接進入後續朗讀流程
+        } else if (mark.text && mark.text.trim()) {
+            // 編輯視窗「圖片辨識」等方式已寫入原始文字時，直接朗讀（不重複呼叫 AI）
+            text = mark.text.trim();
         } else {
-            // 沒有替換文字，才送圖片給 AI（與框選朗讀一致，參考 readTextInsideFrame 的邏輯）
+            // 沒有替換文字且尚無辨識文字，才送圖片給 AI（與框選朗讀一致，參考 readTextInsideFrame 的邏輯）
             // 如果正在進行圖片辨識，直接返回，防止重複執行
             if (typeof isImageRecognizing !== 'undefined' && isImageRecognizing) {
                 console.log('圖片辨識正在進行中，忽略重複請求');
@@ -6589,8 +6613,13 @@ async function editMarkReplacementText(markId, pageNum) {
     const mark = marks[pageNum]?.find(m => m.id === markId);
     if (!mark) return;
     
-    // 總是重新提取原始文字，使用 extractTextFromMark 函數
-    mark.text = extractTextFromMark(mark, pageNum);
+    // 從 PDF 文字層提取原始文字；若框內無文字則保留既有 mark.text（例如先前「圖片辨識」寫入）
+    const extractedForMark = extractTextFromMark(mark, pageNum);
+    if (extractedForMark && extractedForMark.trim()) {
+        mark.text = extractedForMark;
+    } else if (!(mark.text && mark.text.trim())) {
+        mark.text = extractedForMark || '';
+    }
     
     // 畫面與 TTS 一致：①、(1)、(一) 等顯示為 ，1，（全形逗號停頓）
     let displayText = mark.text || '(無文字)';
@@ -6605,11 +6634,15 @@ async function editMarkReplacementText(markId, pageNum) {
         title: '編輯替換文字',
         html: `
             <div style="text-align: left; margin-bottom: 20px; width: 100%; box-sizing: border-box;">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; width: 95%; box-sizing: border-box;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; width: 95%; box-sizing: border-box;">
                     <label style="font-weight: bold; font-size: 18px; color: #333; margin: 0;">原始文字：</label>
-                    <button id="copyOriginalTextBtn" type="button" onclick="window.copyOriginalToReplacement && window.copyOriginalToReplacement()" style="padding: 6px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: normal; white-space: nowrap; pointer-events: auto; z-index: 10000; position: relative;">複製到替換文字</button>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                        <button id="markVisionRecognizeBtn" type="button" style="padding: 6px 12px; background-color: #6f42c1; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: normal; white-space: nowrap; pointer-events: auto; z-index: 10000; position: relative;">圖片辨識（AI）</button>
+                        <button id="copyOriginalTextBtn" type="button" onclick="window.copyOriginalToReplacement && window.copyOriginalToReplacement()" style="padding: 6px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: normal; white-space: nowrap; pointer-events: auto; z-index: 10000; position: relative;">複製到替換文字</button>
+                    </div>
                 </div>
                 <div id="originalTextDisplay" style="width: 95%; margin-left: 0; margin-right: auto; padding: 12px 12px 12px 0; background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; min-height: 50px; max-height: 300px; overflow-y: auto; word-wrap: break-word; word-break: break-all; font-size: 15px; line-height: 1.8; color: #555; box-sizing: border-box; white-space: pre-wrap; font-family: inherit; cursor: pointer;" title="點擊此處發音">${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div id="markEditVisionFeedback" role="status" aria-live="polite" style="display: none; width: 95%; margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 14px; line-height: 1.5; box-sizing: border-box; background: #f0f4ff; border: 1px solid #c5d4f5;"></div>
             </div>
             <div style="text-align: left; width: 100%; box-sizing: border-box;">
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; width: 95%; box-sizing: border-box;">
@@ -6628,6 +6661,36 @@ async function editMarkReplacementText(markId, pageNum) {
             popup: 'swal-high-z-index'
         },
         didOpen: () => {
+            let markEditVisionFeedbackTimer = null;
+            const showMarkEditVisionFeedback = (kind, message) => {
+                const el = document.getElementById('markEditVisionFeedback');
+                if (markEditVisionFeedbackTimer) {
+                    clearTimeout(markEditVisionFeedbackTimer);
+                    markEditVisionFeedbackTimer = null;
+                }
+                if (!el) return;
+                el.style.display = 'block';
+                if (kind === 'success') {
+                    el.style.color = '#0f5132';
+                    el.style.background = '#d1e7dd';
+                    el.style.borderColor = '#badbcc';
+                } else if (kind === 'warning') {
+                    el.style.color = '#664d03';
+                    el.style.background = '#fff3cd';
+                    el.style.borderColor = '#ffecb5';
+                } else {
+                    el.style.color = '#842029';
+                    el.style.background = '#f8d7da';
+                    el.style.borderColor = '#f5c2c7';
+                }
+                el.textContent = message;
+                markEditVisionFeedbackTimer = setTimeout(() => {
+                    el.style.display = 'none';
+                    el.textContent = '';
+                    markEditVisionFeedbackTimer = null;
+                }, kind === 'success' ? 4000 : 5000);
+            };
+
             const input = document.getElementById('replacementTextInput');
             if (input) {
                 input.focus();
@@ -6667,6 +6730,71 @@ async function editMarkReplacementText(markId, pageNum) {
                         window.copyOriginalToReplacement();
                     });
                     console.log('已綁定複製按鈕事件監聽器');
+                }
+                
+                const visionBtn = document.getElementById('markVisionRecognizeBtn');
+                if (visionBtn) {
+                    visionBtn.addEventListener('click', async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (visionBtn.dataset.busy === '1') return;
+                        const geminiImageDescribeFunc = typeof window !== 'undefined' && window.geminiImageDescribe ? window.geminiImageDescribe : (typeof geminiImageDescribe !== 'undefined' ? geminiImageDescribe : null);
+                        if (!geminiImageDescribeFunc || typeof geminiImageDescribeFunc !== 'function') {
+                            showMarkEditVisionFeedback('error', '圖片辨識未載入，請重新整理頁面後再試。');
+                            return;
+                        }
+                        let apiKey = '';
+                        try {
+                            apiKey = await loadApiKeyFromIndexedDB();
+                        } catch (keyErr) {
+                            console.warn('讀取 API KEY 失敗:', keyErr);
+                        }
+                        if (!apiKey) {
+                            showMarkEditVisionFeedback('warning', '請先在設定中設定 Gemini API KEY。');
+                            return;
+                        }
+                        const { base64Image, hasImageContent } = getMarkRegionVisionData(markId, pageNum);
+                        if (!hasImageContent || !base64Image) {
+                            showMarkEditVisionFeedback('warning', '標記區域內沒有可辨識的圖片，請確認框選範圍涵蓋圖片。');
+                            return;
+                        }
+                        visionBtn.dataset.busy = '1';
+                        const visionBtnLabel = visionBtn.textContent;
+                        visionBtn.textContent = '辨識中…';
+                        visionBtn.disabled = true;
+                        visionBtn.style.opacity = '0.7';
+                        try {
+                            const aiDescription = await geminiImageDescribeFunc(base64Image);
+                            if (aiDescription && String(aiDescription).trim()) {
+                                mark.text = String(aiDescription).trim();
+                                displayText = mark.text || '(無文字)';
+                                if (displayText !== '(無文字)') {
+                                    displayText = displayText.replace(/^[\s\t\u3000]+/, '');
+                                    displayText = normalizeCircledDigitsForDisplay(displayText);
+                                }
+                                const origEl = document.getElementById('originalTextDisplay');
+                                if (origEl) {
+                                    origEl.innerHTML = displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                }
+                                const replacementInputAfterVision = document.getElementById('replacementTextInput');
+                                if (replacementInputAfterVision && displayText !== '(無文字)') {
+                                    replacementInputAfterVision.value = displayText;
+                                }
+                                showMarkEditVisionFeedback('success', '已辨識並同步到「原始文字」與「替換文字」，可繼續編輯或按儲存。');
+                            } else {
+                                showMarkEditVisionFeedback('warning', 'AI 無法辨識此區域。');
+                            }
+                        } catch (visionErr) {
+                            console.error('標記框圖片辨識失敗:', visionErr);
+                            const errMsg = (visionErr && visionErr.message) ? visionErr.message : 'AI 辨識過程發生錯誤';
+                            showMarkEditVisionFeedback('error', errMsg);
+                        } finally {
+                            visionBtn.dataset.busy = '0';
+                            visionBtn.textContent = visionBtnLabel;
+                            visionBtn.disabled = false;
+                            visionBtn.style.opacity = '';
+                        }
+                    });
                 }
                 
                 // 為原始文字欄位添加點擊事件，觸發語音朗讀
