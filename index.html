@@ -3737,9 +3737,11 @@ document.addEventListener('touchend', () => {
                 document.getElementById('sendButton').classList.remove('button-danger');
                 document.getElementById('sendButton').classList.add('button-light');
                 setTouchSelectionReadingState(false);
-                // 與「取消朗讀」一致：朗讀完成後先隱藏，下一次重新選取才顯示
-                hideTouchReadButtonUntilNextSelection = true;
-                lastSelectedFraForButton = getLastSelectedFra();
+                // 若使用者已預先選好下一段（紅色選取仍存在），要保留「開始朗讀」按鈕
+                const nextSelectedFra = getLastSelectedFra();
+                hideTouchReadButtonUntilNextSelection = !nextSelectedFra;
+                lastSelectedFraForButton = nextSelectedFra;
+                lastReadingFraForCancelButton = null;
                 updateTouchReadFloatingButton();
                 updateTouchCancelFloatingButton();
             }, {
