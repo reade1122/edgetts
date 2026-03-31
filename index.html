@@ -2027,14 +2027,16 @@ if (clearCacheButton) {
       setTimeout(initBrowserVoices, 500);
       setTimeout(initBrowserVoices, 1000);
   }
-          document.addEventListener('DOMContentLoaded', async () => {
+          document.addEventListener('DOMContentLoaded', () => {
     audioPlayer = document.getElementById('audioPlayer');
     
-    // 檢查 API 健康狀態
-    const isAPIHealthy = await checkAPIHealth();
-    if (!isAPIHealthy) {
-        console.warn('Edge TTS API 服務未運行，語音功能可能無法使用');
-    }
+    // 檢查 API 健康狀態（非阻塞）：先 await 會在 HF 當機／連線卡住時卡住整個回呼，
+    // 導致框選朗讀紅框與按鈕等 UI 永遠無法初始化。
+    checkAPIHealth().then((isAPIHealthy) => {
+        if (!isAPIHealthy) {
+            console.warn('Edge TTS API 服務未運行，語音功能可能無法使用');
+        }
+    });
     
     const findInput = document.getElementById('findInput'); // 獲取輸入欄位
     const findEntireWord = document.getElementById('findEntireWord'); // 獲取 Whole Words 勾選框
